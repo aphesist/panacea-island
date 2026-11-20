@@ -17,6 +17,16 @@ OUT="$RUN/panacea-chat.txt"
 TARGET="$RUN/panacea-target"
 ipc() { qs -p "$CFG" ipc call pill "$@" 2>/dev/null; }
 
+# voxtype opens the GPU (RTX) at its first transcription and never lets go, which keeps the RTX
+# awake for good. 90 s after the last dictation the daemon restarts: the new one holds no GPU
+# until it transcribes again, so the RTX can sleep. A new dictation cancels the pending restart.
+RELEASE=voxtype-release
+release_later() {
+    systemctl --user stop "$RELEASE.timer" >/dev/null 2>&1
+    systemd-run --user --quiet --collect --unit="$RELEASE" --on-active=90 \
+        systemctl --user try-restart voxtype.service >/dev/null 2>&1
+}
+
 ensure_daemon() {
     systemctl --user is-active --quiet voxtype && return 0
     systemctl --user start voxtype 2>/dev/null
@@ -30,6 +40,7 @@ case "${1:-}" in
         command -v voxtype >/dev/null || { ipc voxUnavailable >/dev/null; exit 1; }
         [ "$(voxtype status 2>/dev/null)" = recording ] && exit 0
         t="${2:-$(ipc voxTarget)}"; [ "$t" = chat ] || t=app
+        systemctl --user stop "$RELEASE.timer" >/dev/null 2>&1
         ensure_daemon
         mkdir -p "$RUN"; printf '%s\n' "$t" > "$TARGET"; rm -f "$OUT"
         if [ "$t" = chat ]; then ok() { voxtype record start --file="$OUT" >/dev/null 2>&1; }
@@ -54,13 +65,15 @@ case "${1:-}" in
             done
         fi
         rm -f "$TARGET"
-        ipc voxDone >/dev/null ;;
+        ipc voxDone >/dev/null
+        release_later ;;
     toggle)
         if [ -f "$TARGET" ] || [ "$(voxtype status 2>/dev/null)" = recording ]; then exec "$0" stop; else exec "$0" start "${2:-}"; fi ;;
     cancel)
         voxtype record cancel >/dev/null 2>&1
         rm -f "$TARGET" "$OUT"
-        ipc voxDone >/dev/null ;;
+        ipc voxDone >/dev/null
+        release_later ;;
     *)
         echo "usage: vox.sh start [chat|app]|stop|toggle [chat|app]|cancel|available" >&2; exit 1 ;;
 esac

@@ -12,7 +12,7 @@ back on its own). Re-run by panacea-portal-patch.path after Panacea updates.
 import os, sys
 
 D = os.path.expanduser("~/.config/panacea")
-VERSION = "v54"
+VERSION = "v60"
 TAG_PREFIX = "// panacea-local portal patch "
 TAG = TAG_PREFIX + VERSION
 
@@ -320,7 +320,7 @@ SHELL = [
      '        flare: root.cornerR\n'
      '    }\n}\n'),
     ('                anchors.fill: parent; anchors.margins: -3; visible: root.vpnBusy\n',
-     '                anchors.fill: parent; anchors.margins: -3; visible: root.vpnBusy && !(root.cfg.glowEnabled && root.cfg.glowVpn)   ' + TAG + ': the glow shows it\n'),
+     '                anchors.fill: parent; anchors.margins: -3; visible: root.vpnBusy && !root.cfg.pkHome && !(root.cfg.glowEnabled && root.cfg.glowVpn)   ' + TAG + ': the glow shows it (v59: not on the kit Home)\n'),
     ('        function files(): void { root.togglePage("files"); }\n',
      '        function files(): void { root.togglePage("files"); }\n'
      '        // ' + TAG + ': light the island edge for an agent: glow <id> "<#hex,#hex,#hex>", glowStop <id>\n'
@@ -648,6 +648,7 @@ SHELL += [
      '            property bool spent: false\n'
      '            Timer { id: swipeQuiet; interval: 260; onTriggered: { tabSwipe.acc = 0; tabSwipe.spent = false; } }\n'
      '            onWheel: wheel => {\n'
+     '                if (root.swipeYield) { wheel.accepted = false; return; }   // v59: a carousel under the pointer takes them\n'
      '                var dx = wheel.pixelDelta.x !== 0 ? wheel.pixelDelta.x : wheel.angleDelta.x / 4;\n'
      '                var dy = wheel.pixelDelta.y !== 0 ? wheel.pixelDelta.y : wheel.angleDelta.y / 4;\n'
      '                if (Math.abs(dx) <= Math.abs(dy) && !spent && Math.abs(acc) < 4) { wheel.accepted = false; return; }\n'
@@ -1013,7 +1014,7 @@ SHELL += [
      '            Text { visible: !root.cfg.pkHome; anchors.centerIn: parent; text: root.vpnBusy ? "···" : root.vpnCountry; color: root.vpnConnected ? root.colBg : root.colFg; font { family: root.fontBody; pixelSize: 12; bold: true } }\n'
      '            // ' + TAG + ': with the kit\'s Home the VPN lives in its tile; this is the settings gear\n'
      '            Rectangle { visible: root.cfg.pkHome; anchors.fill: parent; radius: width / 2; z: 2\n'
-     '                color: gearMa.containsMouse ? root.pk.hover : "#000000"\n'
+     '                color: gearMa.containsMouse ? root.pk.hover : "transparent"\n'
      '                PkIcon { sys: root; anchors.centerIn: parent; name: "gear-six"; size: root.pk.iMd; color: gearMa.containsMouse ? root.pk.fg : root.pk.soft }\n'
      '                MouseArea { id: gearMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor\n'
      '                            onClicked: { root.settingsTab = 0; root.togglePage("settings"); } } }\n'
@@ -1126,6 +1127,71 @@ VOXSH = [
     ('ipc() { qs -c "$CFG" ipc call pill "$@" >/dev/null 2>&1; }\n',
      'ipc() { qs -c "$CFG" ipc call pill "$@" >/dev/null 2>&1; }\n'
      '[ -x "$CFG/scripts/custom/vox.sh" ] && exec "$CFG/scripts/custom/vox.sh" "$@"   # ' + TAG + '\n'),
+]
+
+# ---- RTX indicator (v55): root.rtxAwake from the dGPU's runtime power state in sysfs (polled every
+# 2 s; reading it never wakes the GPU). Home shows a graphics-card icon while it's awake, the
+# battery page says what keeps it awake (scripts/custom/gpu-users.sh).
+SHELL += [
+    ('    property string voxState: ""     // "" | "listening" | "transcribing"\n',
+     '    property string voxState: ""     // "" | "listening" | "transcribing"\n'
+     '    // ' + TAG + ': is the RTX (NVIDIA dGPU) awake? Its PCI address is found once.\n'
+     '    property bool rtxAwake: false\n'
+     '    property bool swipeYield: false   // v59: true while the pointer is over a carousel (sideways swipes go to it, not the tabs)\n'
+     '    // v60: the battery\'s power draw, averaged (time constant 5 min, sampled every 10 s) so the\n'
+     '    // time-left estimate doesn\'t jump with every spike; restarts on plugging in / unplugging.\n'
+     '    property real battAvgW: 0\n'
+     '    property real battAvgT: 0\n'
+     '    property bool battAvgChg: false\n'
+     '    function battSample() {\n'
+     '        var w = Math.abs(root.batteryRate), now = Date.now(), chg = root.batteryCharging || root.acOnline;\n'
+     '        if (!(w >= 0.3)) return;\n'
+     '        if (root.battAvgT === 0 || chg !== root.battAvgChg || now - root.battAvgT > 120000) root.battAvgW = w;   // fresh start (or after a sleep)\n'
+     '        else root.battAvgW += (1 - Math.exp(-(now - root.battAvgT) / 300000)) * (w - root.battAvgW);\n'
+     '        root.battAvgT = now; root.battAvgChg = chg;\n'
+     '    }\n'
+     '    Timer { interval: 10000; repeat: true; running: root.batteryPresent; triggeredOnStart: true; onTriggered: root.battSample() }\n'
+     '    Connections { target: root; function onAcOnlineChanged() { root.battAvgT = 0; battRestart.restart(); } }\n'
+     '    Timer { id: battRestart; interval: 3000; onTriggered: root.battSample() }   // UPower\'s rate settles a few s after a plug change\n'
+     '    property string rtxPath: ""\n'
+     '    Process {\n'
+     '        running: true\n'
+     '        command: ["sh", "-c", "for d in /sys/bus/pci/drivers/nvidia/0000:*; do [ -e \\"$d/power/runtime_status\\" ] && { echo \\"$d/power/runtime_status\\"; break; }; done"]\n'
+     '        stdout: SplitParser { onRead: data => root.rtxPath = String(data).trim() }\n'
+     '    }\n'
+     '    FileView { id: rtxState; path: root.rtxPath; printErrors: false\n'
+     '               onLoaded: root.rtxAwake = String(text()).trim() === "active" }\n'
+     '    Timer { interval: 2000; repeat: true; running: root.rtxPath !== ""; onTriggered: rtxState.reload() }\n'),
+]
+
+# ---- RTX sleep (v56): pollers never call nvidia-smi. Each call wakes the RTX from runtime sleep,
+# and the island polls sysload.sh every few seconds while open (and the System page while shown),
+# so the RTX stayed awake whenever the island was open. NVIDIA load/temperature just isn't shown.
+SYSLOAD = [
+    ('    if [ -z "$gpu" ] || [ -z "$tgpu" ]; then\n        if command -v nvidia-smi >/dev/null 2>&1; then\n',
+     '    # ' + TAG + ': no nvidia-smi from a poller: it wakes the RTX from runtime sleep (battery)\n'
+     '    if false; then\n        if command -v nvidia-smi >/dev/null 2>&1; then\n'),
+]
+
+# ---- Kit screens (v57): the launcher and the polkit password card drawn with the kit
+# (LauncherPage.qml, AuthPage.qml: same API and behaviour as Panacea's LauncherView / AuthView).
+SHELL += [
+    ('        Component { id: launcherComp; LauncherView { sys: root } }',
+     '        Component { id: launcherComp; LauncherPage { sys: root } }   ' + TAG),
+    ('        Component { id: authComp;     AuthView { sys: root } }',
+     '        Component { id: authComp;     AuthPage { sys: root } }   ' + TAG),
+    # v58: the password manager (Proton Pass through vault.sh -> vault-proton.py) and its save card
+    ('        Component { id: vaultComp;     VaultView { sys: root } }',
+     '        Component { id: vaultComp;     VaultPage { sys: root } }   ' + TAG),
+    ('        Component { id: vaultSaveComp; VaultSaveView { sys: root } }',
+     '        Component { id: vaultSaveComp; VaultSavePage { sys: root } }   ' + TAG),
+]
+
+# ---- Header (v59): with the kit's Home, Panacea's VPN button (white when connected, which showed
+# through the gear's veil as a white disc) draws nothing: the gear sits on it like bell and power.
+SHELL += [
+    ('            color: root.vpnConnected ? root.colFg : (root.page === "vpn" ? Qt.rgba(1,1,1,0.12) : "transparent")\n',
+     '            color: root.cfg.pkHome ? "transparent" : root.vpnConnected ? root.colFg : (root.page === "vpn" ? Qt.rgba(1,1,1,0.12) : "transparent")   ' + TAG + '\n'),
 ]
 
 # ---- Editor (v42): the shell keeps the editor's file and unsaved buffer (EditorView.qml),
@@ -1443,6 +1509,12 @@ SHELL += [
      '                                                  root.powerProfile, root.cfg.pkSaverHz ? "1" : "0"]) }\n'),
 ]
 
+# v56: the System page's GPU temperature never asks nvidia-smi (it wakes the RTX)
+SYSTEM += [
+    ('"if [ -z \\"$gpu\\" ] && command -v nvidia-smi >/dev/null 2>&1; then " +',
+     '"if false && command -v nvidia-smi >/dev/null 2>&1; then " +   // ' + TAG + ': nvidia-smi wakes the RTX'),
+]
+
 def plan(path, repl):
     """-> (new text, pristine text to save or None), or None if an anchor is missing."""
     cur = open(path, encoding="utf-8").read()
@@ -1477,7 +1549,7 @@ def write(path, text):
 
 
 def main():
-    targets = [(os.path.join(D, "FilesView.qml"), FILES), (os.path.join(D, "SetMotion.qml"), MOTION), (os.path.join(D, "SetBarIsland.qml"), ISLAND_SETTINGS), (os.path.join(D, "SetSystem.qml"), SYSTEM), (os.path.join(D, "SetAppearance.qml"), APPEARANCE), (os.path.join(D, "scripts", "voxtype.sh"), VOXSH), (os.path.join(D, "shell.qml"), SHELL)]
+    targets = [(os.path.join(D, "FilesView.qml"), FILES), (os.path.join(D, "SetMotion.qml"), MOTION), (os.path.join(D, "SetBarIsland.qml"), ISLAND_SETTINGS), (os.path.join(D, "SetSystem.qml"), SYSTEM), (os.path.join(D, "SetAppearance.qml"), APPEARANCE), (os.path.join(D, "scripts", "voxtype.sh"), VOXSH), (os.path.join(D, "scripts", "sysload.sh"), SYSLOAD), (os.path.join(D, "shell.qml"), SHELL)]
     plans = []
     for path, repl in targets:
         p = plan(path, repl)
@@ -1488,7 +1560,7 @@ def main():
     changed = False
     here = os.path.dirname(os.path.abspath(__file__))
     kit = sorted(n for n in os.listdir(os.path.join(here, "..", "ui")) if n.startswith("Pk") and n.endswith((".qml", ".js"))) if os.path.isdir(os.path.join(here, "..", "ui")) else []
-    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "ZenTabView.qml", "IslandToasts.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
+    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "ZenTabView.qml", "IslandToasts.qml", "LauncherPage.qml", "AuthPage.qml", "VaultPage.qml", "VaultSavePage.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
         src = os.path.join(here, name)
         if not os.path.exists(src):
             src = os.path.join(here, "..", "ui", name)   # the design kit (PkMorph)

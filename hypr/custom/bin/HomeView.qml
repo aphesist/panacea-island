@@ -49,10 +49,15 @@ Item {
         return (h > 0 ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (r < 10 ? "0" : "") + r;
     }
     // battery time left (discharging) or to full (charging), from UPower's rate and capacity
+    // The rate is the shell's 5-minute average of the draw (battAvgW), not UPower's instant reading,
+    // and the result is rounded (5 min under 2 h, 10 min above) so it doesn't flicker.
     readonly property string batteryTime: {
-        var cap = sys.batteryCapacity || 0, rate = Math.abs(sys.batteryRate || 0), pct = sys.batteryPct || 0;
+        var cap = sys.batteryCapacity || 0, pct = sys.batteryPct || 0;
+        var rate = sys.battAvgW > 0 ? sys.battAvgW : Math.abs(sys.batteryRate || 0);
         if (cap <= 0 || rate < 0.3) return "";
-        return sys.batteryCharging ? hm(cap * (100 - pct) / 100 / rate) : sys.acOnline ? "" : hm(cap * pct / 100 / rate);
+        var hours = sys.batteryCharging ? cap * (100 - pct) / 100 / rate : sys.acOnline ? 0 : cap * pct / 100 / rate;
+        var step = hours < 2 ? 5 : 10;
+        return hm(Math.round(hours * 60 / step) * step / 60);
     }
     // pending updates for the dot on "Updates": the Updates screen's last check, refreshed in the
     // background when Home opens and the check is older than three hours
@@ -118,7 +123,16 @@ Item {
                 id: trayRow
                 anchors.right: parent.right; anchors.rightMargin: -4; anchors.bottom: parent.bottom; anchors.bottomMargin: -6
                 spacing: 0
-                visible: !!view.sys.trayItems && view.sys.trayItems.values.length > 0
+                visible: (!!view.sys.trayItems && view.sys.trayItems.values.length > 0) || view.sys.rtxAwake
+                // the RTX is awake (it powers off when idle): click for what keeps it up
+                Rectangle {
+                    visible: view.sys.rtxAwake
+                    width: 28; height: 28; radius: 14
+                    color: rtxMa.containsMouse ? view.t.hover : "transparent"
+                    PkIcon { sys: view.sys; anchors.centerIn: parent; name: "graphics-card"; filled: true; size: 16; color: view.t.soft }
+                    MouseArea { id: rtxMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: { view.sys.page = "battery"; view.sys.holdOpen = true; } }
+                }
                 Repeater {
                     model: view.sys.trayItems
                     delegate: Rectangle {
@@ -391,45 +405,107 @@ Item {
             }
         }
 
-        // quick actions: a bare icon over a short label, on one card
+        // quick actions: a bare icon over a short label, on one card that pages sideways (a
+        // carousel): swipe sideways over it, or click a page dot; the pages slide on the shape spring
         PkCard {
+            id: quickCard
             sys: view.sys
-            width: parent.width; height: quickRow.height + 12
-            Grid {
-                id: quickRow
-                x: 6; anchors.verticalCenter: parent.verticalCenter
-                columns: quick.count
-                rowSpacing: 2
-                readonly property real cell: (parent.width - 12) / Math.max(1, columns)
-                Repeater {
-                    id: quick
-                    model: [
-                        { icon: "folder", label: "Files", on: false, dot: false, show: view.sys.cfg.featFiles !== false, act: () => view.sys.togglePage("files") },
-                        { icon: "gauge", label: "Tasks", on: false, dot: false, show: true, act: () => view.sys.openSub("tasks") },
-                        { icon: "arrow-circle-down", label: "Updates", on: false, dot: view.updates > 0, show: true, act: () => view.sys.togglePage("updates") },
-                        { icon: "scroll", label: "Logs", on: false, dot: false, show: true, act: () => view.sys.togglePage("logs") },
-                        { icon: "note-pencil", label: "Editor", on: false, dot: false, show: true, act: () => view.sys.editorOpen("") },
-                        { icon: "selection", label: "Screen", on: false, dot: false, show: true, act: () => view.sys.togglePage("screen") },
-                        { icon: "sun-dim", label: "Night", on: view.sys.nightLight, dot: false, show: view.sys.nightAvailable, act: () => view.sys.toggleNightLight() },
-                        { icon: "coffee", label: "Awake", on: view.sys.keepAwake, dot: false, show: true, act: () => { view.sys.keepAwake = !view.sys.keepAwake; } }
-                    ].filter(q => q.show)
-                    delegate: Rectangle {
-                        id: qa
-                        required property var modelData
-                        width: quickRow.cell; height: 58; radius: view.t.rControl
-                        color: qa.modelData.on ? view.t.selected : qaMa.pressed ? view.t.pressed : qaMa.containsMouse ? view.t.hover : "transparent"
-                        Behavior on color { ColorAnimation { duration: view.t.dFast } }
-                        PkIcon { sys: view.sys; anchors.horizontalCenter: parent.horizontalCenter; y: 9
-                                 name: qa.modelData.icon; filled: qa.modelData.on; size: view.t.iMd + 2
-                                 color: qa.modelData.on || qaMa.containsMouse ? view.t.fg : view.t.soft }
-                        Rectangle { visible: qa.modelData.dot; width: 7; height: 7; radius: 3.5; color: view.t.accent
-                                    x: parent.width / 2 + 8; y: 7 }
-                        PkText { sys: view.sys; role: "caption"; anchors.horizontalCenter: parent.horizontalCenter; y: 37
-                                 text: qa.modelData.label; font.pixelSize: 10
-                                 color: qa.modelData.on || qaMa.containsMouse ? view.t.fg : view.t.muted }
-                        MouseArea { id: qaMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                    onClicked: qa.modelData.act() }
+            width: parent.width; height: 58 + 12 + (pages > 1 ? 11 : 0)
+            readonly property int per: 5
+            readonly property real pageW: width - 12
+            readonly property var items: [
+                { icon: "folder", label: "Files", on: false, dot: false, show: view.sys.cfg.featFiles !== false, act: () => view.sys.togglePage("files") },
+                { icon: "gauge", label: "Tasks", on: false, dot: false, show: true, act: () => view.sys.openSub("tasks") },
+                { icon: "key", label: "Passwords", on: false, dot: false, show: true, act: () => view.sys.togglePage("vault") },
+                { icon: "arrow-circle-down", label: "Updates", on: false, dot: view.updates > 0, show: true, act: () => view.sys.togglePage("updates") },
+                { icon: "sun-dim", label: "Night", on: view.sys.nightLight, dot: false, show: view.sys.nightAvailable, act: () => view.sys.toggleNightLight() },
+                { icon: "coffee", label: "Awake", on: view.sys.keepAwake, dot: false, show: true, act: () => { view.sys.keepAwake = !view.sys.keepAwake; } },
+                { icon: "note-pencil", label: "Editor", on: false, dot: false, show: true, act: () => view.sys.editorOpen("") },
+                { icon: "calculator", label: "Calc", on: false, dot: false, show: true, act: () => view.sys.togglePage("calc") },
+                { icon: "selection", label: "Screen", on: false, dot: false, show: true, act: () => view.sys.togglePage("screen") },
+                { icon: "scroll", label: "Logs", on: false, dot: false, show: true, act: () => view.sys.togglePage("logs") }
+            ].filter(q => q.show)
+            readonly property int pages: Math.max(1, Math.ceil(items.length / per))
+            property int pageIx: 0
+            function go(i) { pageIx = Math.max(0, Math.min(pages - 1, i)); }
+            onPagesChanged: go(pageIx)
+            PkMorph { id: quickSlide; to: -quickCard.pageIx * quickCard.pageW
+                      ms: view.sys.animMs; bounce: view.sys.animBounce; still: view.sys.noMotion }
+
+            Item {
+                x: 6; y: 6; width: quickCard.pageW; height: 58
+                clip: true
+                Row {
+                    x: quickSlide.value
+                    Repeater {
+                        model: quickCard.items
+                        delegate: Rectangle {
+                            id: qa
+                            required property var modelData
+                            required property int index
+                            width: quickCard.pageW / quickCard.per; height: 58; radius: view.t.rControl
+                            // the cells of the page sliding in/out fade with the room they have
+                            readonly property real cx: quickSlide.value + (index + 0.5) * width
+                            opacity: Math.max(0, Math.min(1, Math.min(cx, quickCard.pageW - cx) / (width * 0.5)))
+                            color: qa.modelData.on ? view.t.selected : qaMa.pressed ? view.t.pressed : qaMa.containsMouse ? view.t.hover : "transparent"
+                            Behavior on color { ColorAnimation { duration: view.t.dFast } }
+                            PkIcon { sys: view.sys; anchors.horizontalCenter: parent.horizontalCenter; y: 9
+                                     name: qa.modelData.icon; filled: qa.modelData.on; size: view.t.iMd + 2
+                                     color: qa.modelData.on || qaMa.containsMouse ? view.t.fg : view.t.soft }
+                            Rectangle { visible: qa.modelData.dot; width: 7; height: 7; radius: 3.5; color: view.t.accent
+                                        x: parent.width / 2 + 8; y: 7 }
+                            PkText { sys: view.sys; role: "caption"; anchors.horizontalCenter: parent.horizontalCenter; y: 37
+                                     text: qa.modelData.label; font.pixelSize: 10
+                                     color: qa.modelData.on || qaMa.containsMouse ? view.t.fg : view.t.muted }
+                            MouseArea { id: qaMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: qa.modelData.act() }
+                        }
                     }
+                }
+            }
+
+            // page dots: the current one is a short white pill
+            Row {
+                visible: quickCard.pages > 1
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom; anchors.bottomMargin: 7
+                spacing: 5
+                Repeater {
+                    model: quickCard.pages
+                    delegate: Rectangle {
+                        required property int index
+                        readonly property bool cur: index === quickCard.pageIx
+                        width: cur ? 14 : 5; height: 5; radius: 2.5
+                        color: cur ? view.t.fg : view.t.dotOff
+                        Behavior on width { NumberAnimation { duration: view.t.dBase; easing.type: Easing.OutCubic } }
+                        Behavior on color { ColorAnimation { duration: view.t.dFast } }
+                        MouseArea { anchors.fill: parent; anchors.margins: -5; cursorShape: Qt.PointingHandCursor
+                                    onClicked: quickCard.go(index) }
+                    }
+                }
+            }
+
+            // sideways swipes over the card page it (the island's tab swipe yields while the
+            // pointer is here); vertical scrolling and clicks pass through
+            HoverHandler { id: quickHover; onHoveredChanged: view.sys.swipeYield = hovered }
+            Component.onDestruction: view.sys.swipeYield = false
+            MouseArea {
+                anchors.fill: parent; z: 5
+                acceptedButtons: Qt.NoButton
+                enabled: quickCard.pages > 1
+                property real acc: 0
+                property bool spent: false
+                Timer { id: quickQuiet; interval: 260; onTriggered: { parent.acc = 0; parent.spent = false; } }
+                onWheel: wheel => {
+                    var dx = wheel.pixelDelta.x !== 0 ? wheel.pixelDelta.x : wheel.angleDelta.x / 4;
+                    var dy = wheel.pixelDelta.y !== 0 ? wheel.pixelDelta.y : wheel.angleDelta.y / 4;
+                    if (Math.abs(dx) <= Math.abs(dy) && !spent && Math.abs(acc) < 4) { wheel.accepted = false; return; }
+                    quickQuiet.restart();
+                    if (spent) return;
+                    acc += dx;
+                    if (Math.abs(acc) < 50) return;
+                    spent = true;
+                    quickCard.go(quickCard.pageIx + (acc < 0 ? 1 : -1));   // fingers left = next page
                 }
             }
         }
@@ -832,6 +908,18 @@ Item {
                            : "GPU stays at its 35 W limit and can sleep when idle"
                         FileView { id: boostUnit; property bool ok: false; path: "/usr/lib/systemd/system/nvidia-powerd.service"
                                    printErrors: false; onLoaded: ok = true } }
+                PkRow { sys: view.sys; icon: "graphics-card"; visible: view.sys.rtxPath !== ""
+                        title: view.sys.rtxAwake ? "RTX: awake" : "RTX: asleep"
+                        sub: !view.sys.rtxAwake ? "Powered off; it wakes when something needs it"
+                           : rtxUsers.names.length ? "Kept awake by " + rtxUsers.names.join(", ")
+                           : "Nothing of yours holds it; it should sleep in a few seconds"
+                        Process { id: rtxUsers; property var names: []; property var acc: []
+                                  command: [Quickshell.env("HOME") + "/.config/panacea/scripts/custom/gpu-users.sh"]
+                                  stdout: SplitParser { onRead: d => rtxUsers.acc.push(String(d).trim()) }
+                                  onExited: { rtxUsers.names = rtxUsers.acc; rtxUsers.acc = []; } }
+                        Timer { interval: 3000; repeat: true; triggeredOnStart: true
+                                running: view.sys.rtxAwake && view.sys.expanded && view.sys.page === "battery"
+                                onTriggered: { rtxUsers.acc = []; rtxUsers.running = true; } } }
                 PkRow {
                     sys: view.sys; title: "60 Hz in Saver"
                     PkToggle { sys: view.sys; anchors.verticalCenter: parent.verticalCenter; on: !!view.sys.cfg.pkSaverHz

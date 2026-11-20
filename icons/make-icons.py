@@ -19,6 +19,7 @@ ICONS = {            # file name -> Phosphor glyph (fill style)
     "screen": "aperture",
     "settings": "gear-six",
     "viewer": "image",
+    "passwords": "key",
 }
 js = open(os.path.join(ROOT, "hypr/custom/ui/PkIcons.js")).read()
 cmap_names = json.loads(re.search(r"var map = (\{.*?\});", js, re.S).group(1))
