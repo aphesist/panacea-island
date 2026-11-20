@@ -12,7 +12,7 @@ back on its own). Re-run by panacea-portal-patch.path after Panacea updates.
 import os, sys
 
 D = os.path.expanduser("~/.config/panacea")
-VERSION = "v53"
+VERSION = "v54"
 TAG_PREFIX = "// panacea-local portal patch "
 TAG = TAG_PREFIX + VERSION
 
@@ -1074,6 +1074,60 @@ SHELL += [
             Rectangle { width: parent.width * Math.max(0, Math.min(1, root.approvalToastRemaining / 30000)); height: parent.height; radius: 2; color: root.pk.on }"""),
 ]
 
+# ---- Dictation (v54): Right Ctrl / the chat's mic -> scripts/custom/vox.sh (Panacea's voxtype.sh
+# hands over to it). The island's chat open: the text lands in the chat box (voxChatTextArrived),
+# the chat draws the wave; else voxtype types into the focused window and the collapsed island
+# is one full-width voice wave (PkVoiceWave) with the red recording dot.
+SHELL += [
+    ('        function voxListening(): void {\n            root.voxState = "listening";',
+     '        function voxListening(target: string): void {   ' + TAG + '\n'
+     '            root.voxTo = target === "chat" ? "chat" : "app";\n'
+     '            root.voxState = "listening";'),
+    ('        function voxDone(): void {\n            root.voxState = "";',
+     '        function voxDone(): void {\n            root.voxState = ""; root.voxTo = "";   ' + TAG),
+    ('        function voxTranscribing(): void { root.voxState = "transcribing"; }\n',
+     '        function voxTranscribing(): void { root.voxState = "transcribing"; }\n'
+     '        function voxTarget(): string { return (root.expanded && root.page === "chat") ? "chat" : "app"; }   ' + TAG + '\n'
+     '        function voxChatText(text: string): void { root.voxChatTextArrived(text); }   ' + TAG + '\n'),
+    ('    readonly property bool voxActive: voxState.length > 0 && !expanded\n',
+     '    readonly property bool voxActive: voxState.length > 0 && !expanded && voxTo !== "chat"   ' + TAG + '\n'
+     '    property string voxTo: ""          ' + TAG + ': "chat" (into the island chat) | "app" (typed by voxtype)\n'
+     '    signal voxChatTextArrived(string text)\n'
+     '    Process { id: voxProc }\n'
+     '    function voxRun(action, target) {   // the chat\'s mic: toggle / cancel\n'
+     '        voxProc.command = [Quickshell.env("HOME") + "/.config/panacea/scripts/custom/vox.sh", action, target || ""];\n'
+     '        voxProc.running = false; voxProc.running = true;\n'
+     '    }\n'),
+    ('        interval: 8000\n        running: root.voxState === "transcribing"',
+     '        interval: root.voxTo === "chat" ? 65000 : 8000   ' + TAG + '\n        running: root.voxState === "transcribing"'),
+    ('            id: voxCapsule\n            z: 120\n            anchors.centerIn: parent\n            spacing: 10\n            visible: root.voxActive\n',
+     '            id: voxCapsule\n            z: 120\n            anchors.centerIn: parent\n            spacing: 10\n            visible: false   ' + TAG + ': the wave below\n'),
+    ('                    ? capsule.evenUp(Math.max(voxCapsule.implicitWidth + 40, 240))',
+     '                    ? capsule.evenUp(Math.max(340, capsule.collapsedMin))   ' + TAG),
+    ('        // ---- свёрнутое: голосовой ввод (voxtype) ------------------------\n',
+     '        // ' + TAG + ': dictation, collapsed: the red recording dot, then the voice wave over all the room\n'
+     '        Item {\n'
+     '            z: 120\n'
+     '            anchors.fill: parent; anchors.leftMargin: 18; anchors.rightMargin: 18\n'
+     '            visible: root.voxActive\n'
+     '            opacity: visible ? 1 : 0\n'
+     '            Behavior on opacity { NumberAnimation { duration: root.animFast } }\n'
+     '            Rectangle { id: voxDot; anchors.verticalCenter: parent.verticalCenter; width: 7; height: 7; radius: 3.5\n'
+     '                        color: root.voxState === "listening" ? root.pk.accent : root.pk.muted }\n'
+     '            PkVoiceWave { sys: root; anchors.left: voxDot.right; anchors.leftMargin: 12; anchors.right: parent.right\n'
+     '                          anchors.verticalCenter: parent.verticalCenter; height: Math.min(26, parent.height - 12)\n'
+     '                          listening: root.voxActive && root.voxState === "listening"\n'
+     '                          busy: root.voxActive && root.voxState === "transcribing" }\n'
+     '        }\n'
+     '        // ---- свёрнутое: голосовой ввод (voxtype) ------------------------\n'),
+]
+# Panacea's voxtype.sh (the Hyprland bind and the quick-settings button call it) hands every call to ours
+VOXSH = [
+    ('ipc() { qs -c "$CFG" ipc call pill "$@" >/dev/null 2>&1; }\n',
+     'ipc() { qs -c "$CFG" ipc call pill "$@" >/dev/null 2>&1; }\n'
+     '[ -x "$CFG/scripts/custom/vox.sh" ] && exec "$CFG/scripts/custom/vox.sh" "$@"   # ' + TAG + '\n'),
+]
+
 # ---- Editor (v42): the shell keeps the editor's file and unsaved buffer (EditorView.qml),
 # the page is wider than the panel, `ipc call pill edit <path>` opens a file.
 SHELL += [
@@ -1423,7 +1477,7 @@ def write(path, text):
 
 
 def main():
-    targets = [(os.path.join(D, "FilesView.qml"), FILES), (os.path.join(D, "SetMotion.qml"), MOTION), (os.path.join(D, "SetBarIsland.qml"), ISLAND_SETTINGS), (os.path.join(D, "SetSystem.qml"), SYSTEM), (os.path.join(D, "SetAppearance.qml"), APPEARANCE), (os.path.join(D, "shell.qml"), SHELL)]
+    targets = [(os.path.join(D, "FilesView.qml"), FILES), (os.path.join(D, "SetMotion.qml"), MOTION), (os.path.join(D, "SetBarIsland.qml"), ISLAND_SETTINGS), (os.path.join(D, "SetSystem.qml"), SYSTEM), (os.path.join(D, "SetAppearance.qml"), APPEARANCE), (os.path.join(D, "scripts", "voxtype.sh"), VOXSH), (os.path.join(D, "shell.qml"), SHELL)]
     plans = []
     for path, repl in targets:
         p = plan(path, repl)

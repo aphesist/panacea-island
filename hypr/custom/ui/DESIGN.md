@@ -103,6 +103,9 @@ Colour and opacity changes (hover, press, selection) are not morphs: they stay s
 - `PkToastLine`: a collapsed-island status toast: bare icon, caption over a name, trailing children;
   `bad` turns icon and caption red. `PkRing`: a level ring (track, white arc, red when `low`).
   Used by `IslandToasts.qml` (Bluetooth, Wi-Fi, charger); approvals use `PkButton`.
+- `PkVoiceWave`: the voice wave (dictation): rounded `muted` bars scrolling right to left from the
+  mic's level above the noise floor (scripts/custom/mic-level.py), dots for silence, both ends
+  fading out; `listening`, `busy` (a ripple while transcribing). Fills its size.
 
 Settings: `SettingsPanel.qml` is the frame (search, groups, segmented sub-pages). The pages keep
 Panacea's `Set*` building blocks, which `ui/settings/Set*.qml` redraw with the kit (same API; the
