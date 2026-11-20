@@ -12,7 +12,7 @@ back on its own). Re-run by panacea-portal-patch.path after Panacea updates.
 import os, sys
 
 D = os.path.expanduser("~/.config/panacea")
-VERSION = "v50"
+VERSION = "v53"
 TAG_PREFIX = "// panacea-local portal patch "
 TAG = TAG_PREFIX + VERSION
 
@@ -71,16 +71,12 @@ SHELL = [
                         color: modelData.action === "panacea-allow" ? "#305f46" : "#643f45"
                         Text { anchors.centerIn: parent; text: modelData.label; color: modelData.action === "panacea-allow" ? "#9be0b1" : "#f0b3b6"; font { pixelSize: 17; bold: true } }
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.replyAgentApproval(modelData.action) }
-""", """                        // """ + TAG + """: flat pills in Panacea's palette (white = primary), like the chat's approval card
-                        width: 76; height: 28; radius: 14
-                        readonly property bool primary: modelData.action === "panacea-allow"
-                        color: primary ? (apMa.containsMouse ? Qt.rgba(1, 1, 1, 0.85) : root.colFg)
-                                       : (apMa.containsMouse ? Qt.rgba(1, 1, 1, 0.16) : Qt.rgba(1, 1, 1, 0.09))
-                        Behavior on color { ColorAnimation { duration: 120 } }
-                        Text { anchors.centerIn: parent; text: parent.primary ? "Allow" : "Deny"
-                               color: parent.primary ? root.colBg : root.colFg
-                               font { family: root.fontFam; pixelSize: root.fontSize - 3; bold: parent.primary } }
-                        MouseArea { id: apMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.replyAgentApproval(modelData.action) }
+""", """                        // """ + TAG + """: the kit's buttons (Allow = primary, Deny = secondary), like the chat's approval card
+                        width: 76; height: apBtn.height; color: "transparent"
+                        PkButton { id: apBtn; sys: root; small: true; width: parent.width
+                                   kind: modelData.action === "panacea-allow" ? "primary" : "secondary"
+                                   text: kind === "primary" ? "Allow" : "Deny"
+                                   onClicked: root.replyAgentApproval(modelData.action) }
 """),
     # The toast's icon. Claude's approval cards get the pixel Claude from the
     # chat instead: no tile behind it, bigger, and animated (it waves for your
@@ -490,10 +486,13 @@ SHELL += [
         root.zenRunning = running;
         if (root.zenMode === "island") {
             // island mode (Zen pref panacea.zen.urlbar = "island"): the bar shows whenever Zen
-            // is the focused window on this screen, tiled or floating, alone or not
-            for (i = 0; mon && i < cl.length; i++) {
+            // is the focused window on this screen, tiled or floating, alone or not - and on the
+            // desktop you're looking at: an empty desktop leaves Zen "last focused", not focused (v51)
+            var onWs = mon && mon.activeWorkspace && !(mon.specialWorkspace && mon.specialWorkspace.id);
+            for (i = 0; onWs && i < cl.length; i++) {
                 var f = cl[i];
-                if (f["class"] === "zen" && f.focusHistoryID === 0 && f.mapped && !f.hidden && f.monitor === mon.id) solo = true;
+                if (f["class"] === "zen" && f.focusHistoryID === 0 && f.mapped && !f.hidden && f.monitor === mon.id
+                    && f.workspace && f.workspace.id === mon.activeWorkspace.id) solo = true;
             }
         } else if (mon && mon.activeWorkspace && !(mon.specialWorkspace && mon.specialWorkspace.id)) {
             var n = 0, zen = false;
@@ -1048,7 +1047,31 @@ SHELL += [
      + '        Component { id: controlsComp; Loader {'),
     ('        function settings(): void { root.settingsTab = 0; root.togglePage("settings"); }\n',
      '        function settings(): void { root.settingsTab = 0; root.togglePage("settings"); }\n'
-     + ''.join('        function %s(): void { root.togglePage("%s"); }   ' % (n, n) + TAG + '\n' for n, _ in SCREENS)),
+     + ''.join('        function %s(): void { root.togglePage("%s"); }   ' % (n, n) + TAG + '\n' for n, _ in SCREENS)
+     # v52: open the island on Home without toggling (4-finger swipe down; `close` is the swipe up)
+     + '        function open(): void { if (!root.expanded) root.togglePage("main"); }   ' + TAG + '\n'),
+]
+
+# ---- Status toasts (v53): the collapsed island's Bluetooth / Wi-Fi / charger toasts come from
+# IslandToasts.qml (kit icons and type, white state, red only for trouble); Panacea's capsules
+# with nerd-font glyphs and icons in circles stay in the file but never show. The approval
+# toast's countdown uses the kit's track and white.
+SHELL += [
+    ("visible: root.btToastActive && !root.recPickActive && !root.voxActive",
+     "visible: false   " + TAG + ": IslandToasts.qml"),
+    ("visible: root.wifiToastActive && !root.recPickActive && !root.voxActive",
+     "visible: false   " + TAG + ": IslandToasts.qml"),
+    ("visible: root.acToastActive && !root.recPickActive && !root.voxActive",
+     "visible: false   " + TAG + ": IslandToasts.qml"),
+    ('property color tint: root.acToastKind === "lowbatt" ? root.colCrit : root.colOk',
+     'property color tint: root.acToastKind === "lowbatt" ? root.pk.accent : root.pk.on   ' + TAG),
+    ("        // ---- свёрнутое: выбор экрана для записи",
+     "        IslandToasts { sys: root; anchors.fill: parent; z: 110 }   " + TAG + "\n\n"
+     "        // ---- свёрнутое: выбор экрана для записи"),
+    ("""            color: Qt.rgba(1,1,1,0.12)
+            Rectangle { width: parent.width * Math.max(0, Math.min(1, root.approvalToastRemaining / 30000)); height: parent.height; radius: 2; color: root.colFg }""",
+     """            color: root.pk.track   """ + TAG + """
+            Rectangle { width: parent.width * Math.max(0, Math.min(1, root.approvalToastRemaining / 30000)); height: parent.height; radius: 2; color: root.pk.on }"""),
 ]
 
 # ---- Editor (v42): the shell keeps the editor's file and unsaved buffer (EditorView.qml),
@@ -1411,7 +1434,7 @@ def main():
     changed = False
     here = os.path.dirname(os.path.abspath(__file__))
     kit = sorted(n for n in os.listdir(os.path.join(here, "..", "ui")) if n.startswith("Pk") and n.endswith((".qml", ".js"))) if os.path.isdir(os.path.join(here, "..", "ui")) else []
-    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "ZenTabView.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
+    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "ZenTabView.qml", "IslandToasts.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
         src = os.path.join(here, name)
         if not os.path.exists(src):
             src = os.path.join(here, "..", "ui", name)   # the design kit (PkMorph)

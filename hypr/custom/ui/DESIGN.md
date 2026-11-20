@@ -100,6 +100,9 @@ Colour and opacity changes (hover, press, selection) are not morphs: they stay s
 - `PkMorph`: the shape spring (see Morphing).
 - `PkNotifCard`: every notification card: app tile, "App · time" (red dot when urgent), title,
   up to `lines` of body; `clicked()`, `closed()` (x on hover). The island's toast copies its order.
+- `PkToastLine`: a collapsed-island status toast: bare icon, caption over a name, trailing children;
+  `bad` turns icon and caption red. `PkRing`: a level ring (track, white arc, red when `low`).
+  Used by `IslandToasts.qml` (Bluetooth, Wi-Fi, charger); approvals use `PkButton`.
 
 Settings: `SettingsPanel.qml` is the frame (search, groups, segmented sub-pages). The pages keep
 Panacea's `Set*` building blocks, which `ui/settings/Set*.qml` redraw with the kit (same API; the

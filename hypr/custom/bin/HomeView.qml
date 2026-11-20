@@ -370,8 +370,19 @@ Item {
                             QtObject { id: recBlink; property real v: 1 }
                             SequentialAnimation on opacity { running: view.sys.recActive && !view.sys.recPaused && !view.t.still; loops: Animation.Infinite
                                 NumberAnimation { to: 0.25; duration: 700 } NumberAnimation { to: 1; duration: 700 } } }
-                PkIconButton { sys: view.sys; visible: view.sys.recActive; anchors.right: parent.right; anchors.rightMargin: 8; y: 8
-                               icon: "stop"; size: view.t.iMd; onClicked: view.sys.toggleRecord() }
+                // stop: a round red button with a white square, like the media card's play circle
+                Rectangle {
+                    visible: view.sys.recActive
+                    anchors.right: parent.right; anchors.rightMargin: 12; y: 12
+                    width: 32; height: 32; radius: 16
+                    color: stopMa.pressed ? Qt.darker(view.t.accent, 1.25) : stopMa.containsMouse ? Qt.lighter(view.t.accent, 1.15) : view.t.accent
+                    scale: stopMa.pressed ? 0.92 : 1
+                    Behavior on color { ColorAnimation { duration: view.t.dFast } }
+                    Behavior on scale { NumberAnimation { duration: view.t.dFast; easing.type: Easing.OutCubic } }
+                    Rectangle { anchors.centerIn: parent; width: 11; height: 11; radius: 3; color: "white" }
+                    MouseArea { id: stopMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: view.sys.toggleRecord() }
+                }
                 Column {
                     x: 14; anchors.bottom: parent.bottom; anchors.bottomMargin: 13; spacing: 1
                     PkText { sys: view.sys; role: "label"; text: view.sys.recActive ? view.sys.recTimeText : "Record" }
