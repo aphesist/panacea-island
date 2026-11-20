@@ -1,0 +1,15 @@
+#!/bin/sh
+# Light Panacea's island edge for your own app or agent (Settings > Motion > Activity glow).
+#   panacea-glow start <name> "#hex[,#hex[,#hex]]"   head colour first; stays on up to 15 min
+#   panacea-glow stop  <name>
+#   panacea-glow run   <name> "#hex,..." -- command args...   glows while the command runs
+QS="qs -p $HOME/.config/panacea ipc call pill"
+case "$1" in
+  start) $QS glow "$2" "${3:-#ffffff}" >/dev/null ;;
+  stop)  $QS glowStop "$2" >/dev/null ;;
+  run)   name=$2 colors=$3; shift 3; [ "$1" = "--" ] && shift
+         $QS glow "$name" "$colors" >/dev/null
+         "$@"; rc=$?
+         $QS glowStop "$name" >/dev/null; exit $rc ;;
+  *) sed -n 2,6p "$0"; exit 2 ;;
+esac

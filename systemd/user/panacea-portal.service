@@ -1,0 +1,10 @@
+[Unit]
+Description=File chooser portal backend using Panacea's file manager
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.impl.portal.desktop.panacea
+ExecStart=/usr/bin/python3 -I %h/.config/hypr/custom/bin/panacea-portal.py
+Restart=on-failure

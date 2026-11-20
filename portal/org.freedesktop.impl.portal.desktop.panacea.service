@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.panacea
+Exec=/bin/false
+SystemdService=panacea-portal.service

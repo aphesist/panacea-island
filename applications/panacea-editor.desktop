@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Panacea Editor
+GenericName=Text Editor
+Comment=Edit text files in the island
+Icon=accessories-text-editor
+Exec=sh -c 'qs -p "$HOME/.config/panacea" ipc call pill edit "$1"' panacea-editor %f
+Terminal=false
+NoDisplay=false
+Categories=Utility;TextEditor;
+MimeType=text/plain;text/x-script;application/x-shellscript;application/json;application/toml;text/x-lua;text/x-python;text/markdown;text/x-log;application/xml;text/css;text/x-csrc;
+StartupNotify=false

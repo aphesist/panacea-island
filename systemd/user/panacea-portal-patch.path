@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch the Panacea files the island patch rewrites, to re-patch after updates
+
+[Path]
+PathChanged=%h/.config/panacea/shell.qml
+PathChanged=%h/.config/panacea/FilesView.qml
+PathChanged=%h/.config/panacea/SettingsView.qml
+PathChanged=%h/.config/panacea/SetSystem.qml
+PathChanged=%h/.config/panacea/SetToggle.qml
+Unit=panacea-portal-patch.service
+
+[Install]
+WantedBy=default.target

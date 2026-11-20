@@ -1,0 +1,6 @@
+[Unit]
+Description=Re-apply the Panacea file-picker patch
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I %h/.config/hypr/custom/bin/portal-patch.py
