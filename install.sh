@@ -34,8 +34,18 @@ fc-cache -f "$DATA/fonts" >/dev/null 2>&1 || true
 say "Helper scripts (panacea/scripts/custom)"
 for f in "$HERE"/panacea/scripts/custom/*; do put "${f#$HERE/}" "$CFG/${f#$HERE/}"; done
 
-say "Editor as an app (Open with > Panacea Editor; no default is changed)"
-put applications/panacea-editor.desktop "$DATA/applications/panacea-editor.desktop"
+say "The island's screens as apps in the launcher, with their icons; they replace Panacea's broken launchers"
+for f in "$HERE"/applications/*.desktop; do put "${f#$HERE/}" "$DATA/applications/$(basename "$f")"; done
+# Panacea's own launchers (panacea-files/-text/-media) call `qs -c <path>`, which never opens
+# anything: these entries replace them, and take over the file types they were the default for.
+for old in files:explorer text:editor media:viewer; do
+    o="panacea-${old%%:*}.desktop"; n="panacea-${old#*:}.desktop"
+    while read -r m; do xdg-mime default "$n" "$m"; done < <(grep -h "=$o" "$CFG/mimeapps.list" 2>/dev/null | cut -d= -f1)
+    rm -f "$DATA/applications/$o"
+done
+for f in "$HERE"/icons/*.svg; do put "${f#$HERE/}" "$DATA/icons/hicolor/scalable/apps/$(basename "$f")"; done
+gtk-update-icon-cache -qtf "$DATA/icons/hicolor" 2>/dev/null || true
+update-desktop-database "$DATA/applications" 2>/dev/null || true
 
 say "Portal backend: the island's file picker and Open with for every app"
 put portal/panacea.portal "$DATA/xdg-desktop-portal/portals/panacea.portal"
@@ -52,6 +62,15 @@ python3 -I "$CFG/hypr/custom/bin/portal-patch.py" || echo "  patch skipped (see 
 busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
 systemctl --user restart panacea-portal.service 2>/dev/null || true
 systemctl --user try-restart xdg-desktop-portal || true
+
+if systemctl cat nvidia-powerd.service >/dev/null 2>&1 && [ ! -e /etc/polkit-1/rules.d/50-panacea-nvidia-powerd.rules ]; then
+    say "NVIDIA Dynamic Boost per power mode (optional, asks for your password once)"
+    echo "  Performance turns on nvidia-powerd, the other modes turn it off. A polkit rule lets"
+    echo "  wheel users start/stop that one service without a password."
+    read -rp "  Install the rule now? [y/N] " a || a=
+    [ "${a,,}" = y ] && pkexec install -Dm644 "$HERE/system/polkit/50-panacea-nvidia-powerd.rules" \
+        /etc/polkit-1/rules.d/50-panacea-nvidia-powerd.rules || echo "  skipped: power modes still work, without Dynamic Boost"
+fi
 
 echo
 [ -d "$BK" ] && echo "Backups of replaced files: $BK"

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Updates
+GenericName=Software Updates
+Comment=Pending updates, news and housekeeping
+Icon=panacea-updates
+Exec=sh -c "qs -p \\$HOME/.config/panacea ipc call pill updates"
+Terminal=false
+Categories=System;PackageManager;
+Keywords=pacman;aur;upgrade;packages;
+StartupNotify=false

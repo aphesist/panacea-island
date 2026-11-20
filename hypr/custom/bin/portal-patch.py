@@ -12,7 +12,7 @@ back on its own). Re-run by panacea-portal-patch.path after Panacea updates.
 import os, sys
 
 D = os.path.expanduser("~/.config/panacea")
-VERSION = "v46"
+VERSION = "v50"
 TAG_PREFIX = "// panacea-local portal patch "
 TAG = TAG_PREFIX + VERSION
 
@@ -1038,7 +1038,7 @@ SHELL += [
 
 # ---- System screens (v38): island pages built from the kit. Each is a page name, a component
 # and an IPC call (`qs -p ~/.config/panacea ipc call pill <name>`).
-SCREENS = [("updates", "UpdatesView"), ("logs", "LogsView"), ("screen", "ScreenView"), ("editor", "EditorView"), ("startup", "StartupView")]
+SCREENS = [("updates", "UpdatesView"), ("logs", "LogsView"), ("screen", "ScreenView"), ("editor", "EditorView"), ("startup", "StartupView"), ("calc", "CalcView")]
 SHELL += [
     ('                           : root.page === "agents"   ? agentsComp\n',
      ''.join('                           : root.page === "%s" ? %sComp   ' % (n, n) + TAG + '\n' for n, _ in SCREENS)
@@ -1151,13 +1151,13 @@ SHELL += [
      '        return ({ vpn: "VPN", wifi: "Wi-Fi", bt: "Bluetooth", notif: "Notifications", audio: "Sound", power: "Power",\n'
      '                  record: "Record", cal: "Calendar", clip: "Clipboard", vault: "Vault", agents: "Agents", launcher: "Apps",\n'
      '                  updates: "Updates", logs: "Logs", screen: "Screen", editor: "Editor", startup: "Startup",\n'
-     '                  openwith: "Open with" })[p] || (p ? p.charAt(0).toUpperCase() + p.slice(1) : "");\n'
+     '                  openwith: "Open with", netmenu: "Wi-Fi", traymenu: "Tray", battery: "Battery", calc: "Calculator" })[p] || (p ? p.charAt(0).toUpperCase() + p.slice(1) : "");\n'
      '    }\n'
      '    function pageIcon(p) {\n'
      '        return ({ vpn: "shield-check", wifi: "wifi-high", bt: "bluetooth", notif: "bell", audio: "speaker-high", power: "power",\n'
      '                  record: "record", cal: "calendar-blank", clip: "clipboard-text", vault: "vault", agents: "robot",\n'
      '                  launcher: "squares-four", updates: "package", logs: "scroll", screen: "selection", editor: "note-pencil",\n'
-     '                  startup: "rocket-launch", openwith: "app-window" })[p] || "circle";\n'
+     '                  startup: "rocket-launch", openwith: "app-window", netmenu: "wifi-high", traymenu: "dots-three", battery: "battery-high", calc: "calculator" })[p] || "circle";\n'
      '    }\n'
      '    function chooseAppStart(spec) {\n'),
     ('(root.page === "main" || root.page === "chat" || root.page === "zentab" || root.page === "vpn")', 'root.tabsPage', "all"),
@@ -1166,8 +1166,11 @@ SHELL += [
      '            Rectangle {   // ' + TAG + ': the page you are on, as a fourth tab\n'
      '                id: pageTab\n'
      '                property string shown: ""\n'
-     '                Connections { target: root; function onPageChanged() { if (root.tabsExtra) pageTab.shown = root.page; } }\n'
-     '                Component.onCompleted: if (root.tabsExtra) shown = root.page\n'
+     '                // decided from the new page itself: root.tabsExtra may not have caught up yet when\n'
+     '                // this runs, and then the tab kept the previous page\'s name ("Main")\n'
+     '                function extra(p) { return ["zen", "auth", "quickfile", "vaultsave", "main", "chat", "zentab"].indexOf(p) < 0; }\n'
+     '                Connections { target: root; function onPageChanged() { if (pageTab.extra(root.page)) pageTab.shown = root.page; } }\n'
+     '                Component.onCompleted: if (extra(root.page)) shown = root.page\n'
      '                width: root.tabsExtra ? pageTabRow.implicitWidth + 30 : 0\n'
      '                visible: width > 0.5\n'
      '                height: 34; radius: 17; clip: true\n'
@@ -1285,6 +1288,84 @@ SHELL += [
 """),
 ]
 
+# ---- Wi-Fi list (v47): a listing still running was never restarted, yet the model was cleared
+# first, so the lines it had already printed (the connected network comes first) were lost. Now a
+# fresh list replaces the old one only once complete, a second request waits for the running one,
+# duplicates merge, and wifiListRev tells views the list changed.
+SHELL += [
+    ('    readonly property var wifiNetworks: wifiModel\n',
+     '    readonly property var wifiNetworks: wifiModel\n'
+     '    property int wifiListRev: 0   // ' + TAG + ': bumped after each complete list\n'),
+    ("""        stdout: SplitParser {
+            onRead: line => {
+                var p = line.trim().split("|");
+                if (p.length < 5) return;
+                wifiModel.append({
+                    connected: p[0] === "yes",
+                    ssid: p[1],
+                    security: p[2],
+                    quality: parseInt(p[3]) || 0,
+                    known: p[4] === "yes"
+                });
+            }
+        }
+        onRunningChanged: if (!running) root.wifiBusy = false
+""", """        property var pending: []      // """ + TAG + """: the list being read
+        property bool again: false    // asked again while reading: list once more afterwards
+        stdout: SplitParser {
+            onRead: line => {
+                var p = line.trim().split("|");
+                if (p.length < 5 || !p[1]) return;
+                pWifiList.pending.push({ connected: p[0] === "yes", ssid: p[1], security: p[2],
+                                         quality: parseInt(p[3]) || 0, known: p[4] === "yes" });
+            }
+        }
+        onRunningChanged: {
+            if (running) return;
+            var seen = {}, out = [];
+            pWifiList.pending.forEach(n => {
+                var o = seen[n.ssid];
+                if (!o) { seen[n.ssid] = n; out.push(n); return; }
+                o.connected = o.connected || n.connected; o.known = o.known || n.known; o.quality = Math.max(o.quality, n.quality);
+            });
+            pWifiList.pending = [];
+            wifiModel.clear();
+            out.forEach(n => wifiModel.append(n));
+            root.wifiListRev++;
+            if (pWifiList.again) { pWifiList.again = false; pWifiList.running = true; }
+            else root.wifiBusy = false;
+        }
+"""),
+    ("""    function refreshWifiList() {
+        wifiModel.clear();
+        root.wifiBusy = true;
+        pWifiList.running = true;
+    }
+""", """    function refreshWifiList() {   // """ + TAG + """
+        root.wifiBusy = true;
+        if (pWifiList.running) { pWifiList.again = true; return; }
+        pWifiList.pending = [];
+        pWifiList.running = true;
+    }
+"""),
+]
+
+# ---- Power modes (v49): beyond TLP (CPU, Samsung firmware profile), Saver drops the OLED to
+# 60 Hz and the others restore 120 Hz (scripts/custom/power-mode.sh), on every mode change.
+SHELL += [
+    ("            property var    editorRecent: []    " + TAG + ": the editor's recent files\n",
+     "            property var    editorRecent: []    " + TAG + ": the editor's recent files\n"
+     "            property bool   pkSaverHz: true     " + TAG + ": 60 Hz in the Saver power mode\n"),
+    ('    property string powerProfile: "balanced"\n',
+     '    property string powerProfile: "balanced"\n'
+     '    // ' + TAG + ': what a mode does beyond TLP (60 Hz in Saver), scripts/custom/power-mode.sh\n'
+     '    onPowerProfileChanged: powerModeApply.restart()\n'
+     '    function applyPowerMode() { powerModeApply.restart(); }\n'
+     '    Timer { id: powerModeApply; interval: 300\n'
+     '            onTriggered: Quickshell.execDetached(["sh", Quickshell.env("HOME") + "/.config/panacea/scripts/custom/power-mode.sh",\n'
+     '                                                  root.powerProfile, root.cfg.pkSaverHz ? "1" : "0"]) }\n'),
+]
+
 def plan(path, repl):
     """-> (new text, pristine text to save or None), or None if an anchor is missing."""
     cur = open(path, encoding="utf-8").read()
@@ -1330,7 +1411,7 @@ def main():
     changed = False
     here = os.path.dirname(os.path.abspath(__file__))
     kit = sorted(n for n in os.listdir(os.path.join(here, "..", "ui")) if n.startswith("Pk") and n.endswith((".qml", ".js"))) if os.path.isdir(os.path.join(here, "..", "ui")) else []
-    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "ZenTabView.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
+    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "ZenTabView.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
         src = os.path.join(here, name)
         if not os.path.exists(src):
             src = os.path.join(here, "..", "ui", name)   # the design kit (PkMorph)

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Screen Capture
+GenericName=Screenshot
+Comment=Screenshots, recording, text from the screen, colour picker
+Icon=panacea-screen
+Exec=sh -c "qs -p \\$HOME/.config/panacea ipc call pill screen"
+Terminal=false
+Categories=Utility;Graphics;
+Keywords=screenshots;record;ocr;color;picker;
+StartupNotify=false

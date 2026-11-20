@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+GenericName=System Settings
+Comment=The shell's settings
+Icon=panacea-settings
+Exec=sh -c "qs -p \\$HOME/.config/panacea ipc call pill settings"
+Terminal=false
+Categories=Settings;
+Keywords=preferences;config;
+StartupNotify=false

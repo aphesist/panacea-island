@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+GenericName=File Manager
+Comment=Browse files in the island
+Icon=panacea-files
+Exec=sh -c "if [ -n \\"\\$1\\" ]; then qs -p \\$HOME/.config/panacea ipc call pill filesAt \\"\\$1\\"; else qs -p \\$HOME/.config/panacea ipc call pill files; fi" panacea-explorer %f
+Terminal=false
+Categories=System;FileManager;
+Keywords=folder;explorer;directory;
+StartupNotify=false
+MimeType=inode/directory;

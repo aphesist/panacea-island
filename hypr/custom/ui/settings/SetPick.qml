@@ -99,6 +99,7 @@ ColumnLayout {
                 x: 32; width: parent.width - 40; anchors.verticalCenter: parent.verticalCenter
                 placeholderText: pick.sys.tr("Поиск языка или кода")
                 onTextEdited: pick.query = text
+                ContextMenu.menu: PkEditMenu { sys: pick.sys; target: searchField }
                 color: pick.t.fg
                 placeholderTextColor: pick.t.muted
                 background: null

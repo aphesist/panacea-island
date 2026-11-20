@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Image Viewer
+GenericName=Image Viewer
+Comment=Images and video in the island, with trim and crop
+Icon=panacea-viewer
+Exec=sh -c "qs -p \\$HOME/.config/panacea ipc call pill media \\"\\$1\\"" panacea-viewer %f
+Terminal=false
+NoDisplay=true
+Categories=Graphics;Viewer;
+MimeType=image/png;image/jpeg;image/gif;image/webp;image/bmp;image/tiff;image/svg+xml;video/mp4;video/webm;video/x-matroska;video/quicktime;
+StartupNotify=false

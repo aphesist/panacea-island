@@ -42,9 +42,25 @@ power and settings sit beside it.
 | **Open with** | Apps asking "open this with…?" get an island page (suggested apps, any app, "always use it") instead of GTK's dialog | automatic (AppChooser portal) |
 | **File picker** | Every app's Open/Save dialog and the chat's paperclip morph the island into its file manager in picker mode | automatic (FileChooser portal) |
 | **Task manager** | Process tree with icons and End task; this machine's hardware with live charts; services | `ipc call pill tasks` |
+| **Calculator** | Type or click; the result shows live, = keeps it, click it to copy. Brackets, %, powers, history | `ipc call pill calc`, the app launcher |
+| **Battery** | Charge, health, draw, charge limit; the power mode and what it actually does (below) | Home |
 | **Settings** | A new frame (search, groups, sub-pages) and every settings control redrawn with the kit | the gear |
 
 `ipc call pill` is short for `qs -p ~/.config/panacea ipc call pill`.
+
+The main screens are also apps in the launcher (Task Manager, Files, Text Editor, Calculator, Image Viewer,
+Updates, Logs, Screen Capture, Settings), each with an icon from one family in `icons/`
+(`make-icons.py` redraws them from the Phosphor font).
+
+### Power modes that do something
+
+TLP already sets the processor and Samsung's firmware profile (which also sets the fans: the
+firmware gives no direct fan control). `panacea/scripts/custom/power-mode.sh` adds the rest
+whenever the mode changes:
+
+- **Saver** drops the internal OLED to 60 Hz (a switch on the Battery page turns that off).
+- **Performance** turns on NVIDIA Dynamic Boost (`nvidia-powerd`); the other modes turn it off,
+  so the GPU can sleep. This needs the polkit rule in `system/polkit/` (the installer offers it).
 
 ### Tabs that slide
 

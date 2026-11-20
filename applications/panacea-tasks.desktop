@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Task Manager
+GenericName=System Monitor
+Comment=Processes, performance and services
+Icon=panacea-tasks
+Exec=sh -c "qs -p \\$HOME/.config/panacea ipc call pill tasks"
+Terminal=false
+Categories=System;Monitor;
+Keywords=processes;cpu;memory;kill;monitor;
+StartupNotify=false

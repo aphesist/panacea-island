@@ -28,7 +28,9 @@ Item {
     function goBack() {
         switch (view.sys.page) {
             case "netmenu": view.sys.page = "wifi"; return true;
-            case "wifi": case "bt": case "battery": view.sys.page = "main"; wifiPage.passwordFor = ""; return true;
+            case "wifi": case "bt": case "battery":
+                if (wifiPage.passwordFor || wifiPage.other) { wifiPage.cancelJoin(); return true; }
+                view.sys.page = "main"; return true;
             case "traymenu":
                 if (trayPage.chain.length) { var c = trayPage.chain.slice(); c.pop(); trayPage.chain = c; return true; }
                 view.sys.page = "main"; view.sys.trayMenuItem = null; return true;
@@ -423,103 +425,270 @@ Item {
 
     }
 
-    // ------------------------------------------------------------ Wi-Fi (and its network menu)
+    // ------------------------------------------------------------ Wi-Fi (and a network's details)
+    // The network you're on as a card; saved and other networks below, strongest first, in a list
+    // that scrolls inside the island; (i) on a saved network opens its details ("netmenu").
     Page {
         id: wifiPage
         name: view.pg === "netmenu" ? "netmenu" : "wifi"
         property string passwordFor: ""
         property string passwordSecurity: "psk"
+        property bool other: false              // joining a hidden network by name
         property string menuSsid: ""
         property bool menuConnected: false
         property bool menuKnown: false
+        property string otherError: ""
+        readonly property bool on: view.sys.wifiOn
+        readonly property string current: view.sys.wifiSsid || ""
+        // the list, split: saved (in range) and the rest; the connected one is the card above
+        readonly property var nets: {
+            var rev = view.sys.wifiListRev, n = view.sys.wifiNetworks, out = [];
+            for (var i = 0; i < n.count; i++) { var e = n.get(i); out.push({ ssid: e.ssid, security: e.security, quality: e.quality, known: e.known, connected: e.connected }); }
+            return out.filter(x => x.ssid !== wifiPage.current && !x.connected).sort((a, b) => b.quality - a.quality);
+        }
+        readonly property var saved: nets.filter(x => x.known)
+        readonly property var others: nets.filter(x => !x.known)
+        readonly property var currentNet: {
+            var rev = view.sys.wifiListRev, n = view.sys.wifiNetworks;
+            for (var i = 0; i < n.count; i++) if (n.get(i).ssid === wifiPage.current) return n.get(i);
+            return null;
+        }
+        function signalWord(q) { return q > 75 ? "Excellent signal" : q > 50 ? "Good signal" : q > 25 ? "Fair signal" : "Weak signal"; }
+        function securityWord(s) { return s === "open" ? "Open" : s === "eap" ? "Enterprise" : s === "sae" ? "WPA3" : "WPA2"; }
+        function join(n) {
+            if (n.ssid === view.sys.wifiConnectingSsid) return;
+            if (n.security === "open" || n.known) { view.sys.connectWifi(n.ssid, ""); return; }
+            wifiPage.other = false; wifiPage.passwordFor = n.ssid; wifiPage.passwordSecurity = n.security;
+            view.sys.holdOpen = true; pwFocus.restart();
+        }
+        function details(ssid, connected, known) {
+            wifiPage.menuSsid = ssid; wifiPage.menuConnected = connected; wifiPage.menuKnown = known;
+            info.load(); view.sys.page = "netmenu";
+        }
         function connectTyped() {
+            if (wifiPage.other) {
+                if (!ssidField.text.trim()) return;
+                hidden.command = ["nmcli", "dev", "wifi", "connect", ssidField.text.trim()].concat(pw.text ? ["password", pw.text] : []).concat(["hidden", "yes"]);
+                wifiPage.otherError = ""; hidden.running = true;
+                return;
+            }
             if (!pw.text.length || (passwordSecurity === "eap" && !user.text.length)) return;
             view.sys.connectWifi(passwordFor, pw.text, user.text, passwordSecurity);
-            passwordFor = ""; pw.text = ""; user.text = ""; view.sys.holdOpen = false;
+            wifiPage.cancelJoin();
         }
+        function cancelJoin() { passwordFor = ""; other = false; pw.text = ""; user.text = ""; ssidField.text = ""; otherError = ""; view.sys.holdOpen = false; }
+
+        Process {
+            id: hidden
+            stderr: StdioCollector { id: hiddenErr }
+            onExited: code => {
+                if (code === 0) { wifiPage.cancelJoin(); view.sys.refreshWifiList(); }
+                else wifiPage.otherError = (hiddenErr.text.replace(/^Error: */, "").trim() || "Couldn't join that network.");
+            }
+        }
+        // a network's details: address, router, DNS, band, speed, auto-join
+        QtObject {
+            id: info
+            property string ip: ""; property string gateway: ""; property string dns: ""
+            property string band: ""; property string rate: ""; property string security: ""
+            property bool auto: true; property bool autoKnown: false
+            function load() { info.ip = ""; info.gateway = ""; info.dns = ""; info.band = ""; info.rate = ""; info.security = ""; info.autoKnown = false; infoProc.running = false; infoProc.running = true; }
+        }
+        Process {
+            id: infoProc
+            command: ["sh", "-c",
+                "ssid=\"$1\"; dev=$(nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2==\"wifi\"{print $1; exit}'); " +
+                "if [ \"$2\" = yes ]; then nmcli -t -f IP4.ADDRESS,IP4.GATEWAY,IP4.DNS dev show \"$dev\"; " +
+                "nmcli -t -f ACTIVE,FREQ,RATE,SECURITY dev wifi | grep '^yes:' | head -1 | sed 's/^/@link:/'; fi; " +
+                "printf '@auto:%s\\n' \"$(nmcli -g connection.autoconnect connection show id \"$ssid\" 2>/dev/null)\"",
+                "_", wifiPage.menuSsid, wifiPage.menuConnected ? "yes" : "no"]
+            stdout: SplitParser {
+                onRead: line => {
+                    var i = line.indexOf(":"), k = line.slice(0, i), v = line.slice(i + 1);
+                    if (k.indexOf("IP4.ADDRESS") === 0 && !info.ip) info.ip = v.replace(/\/\d+$/, "");
+                    else if (k === "IP4.GATEWAY") info.gateway = v;
+                    else if (k.indexOf("IP4.DNS") === 0) info.dns = info.dns ? info.dns + ", " + v : v;
+                    else if (k === "@link") {
+                        var p = v.split(":");          // yes:5180 MHz:540 Mbit/s:WPA2
+                        var mhz = parseInt(p[1]) || 0;
+                        info.band = mhz > 5900 ? "6 GHz" : mhz > 4900 ? "5 GHz" : mhz > 0 ? "2.4 GHz" : "";
+                        info.rate = p[2] || ""; info.security = p.slice(3).join(":") || "";
+                    } else if (k === "@auto") { info.autoKnown = v === "yes" || v === "no"; info.auto = v !== "no"; }
+                }
+            }
+        }
+        Process { id: autoProc; onExited: info.load() }
 
         PkHeader {
+            id: wifiHead
             sys: view.sys; width: parent.width
             title: view.pg === "netmenu" ? wifiPage.menuSsid : "Wi-Fi"; back: true
             onBackClicked: view.goBack()
-            PkIconButton { sys: view.sys; visible: view.pg === "wifi"; icon: "arrows-clockwise"; size: view.t.iMd
+            PkIconButton { sys: view.sys; visible: view.pg === "wifi" && wifiPage.on; icon: "arrows-clockwise"; size: view.t.iMd
                            RotationAnimation on rotation { running: view.sys.wifiBusy && !view.t.still; loops: Animation.Infinite; from: 0; to: 360; duration: 900 }
                            onClicked: view.sys.scanWifi() }
-            PkToggle { sys: view.sys; anchors.verticalCenter: parent.verticalCenter; visible: view.pg === "wifi"; on: view.sys.wifiOn; onToggled: view.sys.toggleWifi() }
+            PkToggle { sys: view.sys; anchors.verticalCenter: parent.verticalCenter; visible: view.pg === "wifi"; on: wifiPage.on; onToggled: view.sys.toggleWifi() }
         }
 
-        // the network menu (right-click on a saved or connected network)
+        // ---- details
+        PkSection {
+            sys: view.sys; width: parent.width; visible: view.pg === "netmenu" && wifiPage.menuConnected
+            PkRow { sys: view.sys; title: "IP address"; value: info.ip || "…" }
+            PkRow { sys: view.sys; title: "Router"; value: info.gateway || "…" }
+            PkRow { sys: view.sys; title: "DNS"; value: info.dns || "…" }
+            PkRow { sys: view.sys; visible: info.band !== ""; title: "Band"; value: info.band + (info.rate ? "  ·  " + info.rate : "") }
+            PkRow { sys: view.sys; visible: info.security !== ""; title: "Security"; value: info.security }
+        }
+        PkSection {
+            sys: view.sys; width: parent.width; visible: view.pg === "netmenu" && info.autoKnown
+            note: "Auto-join connects to this network by itself whenever it's in range."
+            PkRow {
+                sys: view.sys; title: "Auto-join"
+                PkToggle { sys: view.sys; anchors.verticalCenter: parent.verticalCenter; on: info.auto
+                           onToggled: on => { info.auto = on; autoProc.command = ["nmcli", "connection", "modify", "id", wifiPage.menuSsid, "connection.autoconnect", on ? "yes" : "no"]; autoProc.running = true; } }
+            }
+        }
         PkSection {
             sys: view.sys; width: parent.width; visible: view.pg === "netmenu"
+            PkRow { sys: view.sys; visible: !wifiPage.menuConnected; icon: "wifi-high"; title: "Join this network"; interactive: true
+                    onClicked: { view.sys.connectWifi(wifiPage.menuSsid, ""); view.sys.page = "wifi"; } }
             PkRow { sys: view.sys; visible: wifiPage.menuConnected; icon: "wifi-slash"; title: "Disconnect"; interactive: true
                     onClicked: { view.sys.disconnectWifi(); view.sys.page = "wifi"; } }
             PkRow { sys: view.sys; visible: wifiPage.menuKnown; icon: "trash"; title: "Forget this network"; danger: true; interactive: true
                     onClicked: { view.sys.forgetWifi(wifiPage.menuSsid); view.sys.page = "wifi"; } }
         }
 
-        // password for the network being joined
+        // ---- off
         PkCard {
-            sys: view.sys; width: parent.width; visible: view.pg === "wifi" && wifiPage.passwordFor.length > 0
+            sys: view.sys; width: parent.width; height: 120; visible: view.pg === "wifi" && !wifiPage.on
+            Column {
+                anchors.centerIn: parent; spacing: 8
+                PkIcon { sys: view.sys; anchors.horizontalCenter: parent.horizontalCenter; name: "wifi-slash"; size: view.t.iXl; color: view.t.faint }
+                PkText { sys: view.sys; role: "sub"; anchors.horizontalCenter: parent.horizontalCenter; text: "Wi-Fi is off" }
+            }
+        }
+
+        // ---- the network you're on
+        PkCard {
+            id: hero
+            sys: view.sys; width: parent.width; height: 72; interactive: true
+            visible: view.pg === "wifi" && wifiPage.on && (wifiPage.current !== "" || view.sys.wifiConnectingSsid !== "")
+            readonly property bool joining: wifiPage.current === "" && view.sys.wifiConnectingSsid !== ""
+            onClicked: if (!joining) wifiPage.details(wifiPage.current, true, true)
+            Rectangle {
+                x: 14; anchors.verticalCenter: parent.verticalCenter; width: 44; height: 44; radius: 22
+                color: hero.joining ? view.t.veil(0.1) : view.t.on
+                PkIcon { sys: view.sys; anchors.centerIn: parent; name: view.wifiIcon(view.sys.wifiQuality); filled: true; size: view.t.iMd
+                         color: hero.joining ? view.t.fg : view.t.onInk }
+            }
+            Column {
+                x: 70; anchors.verticalCenter: parent.verticalCenter; width: parent.width - x - 50; spacing: 3
+                PkText { sys: view.sys; role: "emph"; width: parent.width; text: hero.joining ? view.sys.wifiConnectingSsid : wifiPage.current }
+                PkText { sys: view.sys; role: "sub"; width: parent.width
+                         text: hero.joining ? "Connecting…"
+                             : ["Connected", wifiPage.signalWord(view.sys.wifiQuality),
+                                wifiPage.currentNet ? wifiPage.securityWord(wifiPage.currentNet.security) : ""].filter(x => x).join("  ·  ") }
+            }
+            PkIcon { sys: view.sys; visible: !hero.joining; anchors.right: parent.right; anchors.rightMargin: 18; anchors.verticalCenter: parent.verticalCenter
+                     name: "info"; size: view.t.iMd; color: hero.hovered ? view.t.fg : view.t.muted }
+        }
+
+        // ---- joining: a password, or a hidden network by name
+        PkCard {
+            id: joinCard
+            sys: view.sys; width: parent.width; visible: view.pg === "wifi" && (wifiPage.passwordFor.length > 0 || wifiPage.other)
             height: pwCol.implicitHeight + 28
             Column {
                 id: pwCol
                 x: 14; y: 14; width: parent.width - 28; spacing: 10
-                PkText { sys: view.sys; role: "label"; text: "Join “" + wifiPage.passwordFor + "”" }
-                PkField { id: user; sys: view.sys; width: parent.width; visible: wifiPage.passwordSecurity === "eap"; placeholder: "Username"
+                PkText { sys: view.sys; role: "label"; text: wifiPage.other ? "Join a hidden network" : "Join “" + wifiPage.passwordFor + "”" }
+                PkField { id: ssidField; sys: view.sys; width: parent.width; visible: wifiPage.other; placeholder: "Network name"; onAccepted: pw.focusIn() }
+                PkField { id: user; sys: view.sys; width: parent.width; visible: !wifiPage.other && wifiPage.passwordSecurity === "eap"; placeholder: "Username"
                           onAccepted: pw.focusIn() }
-                Row {
-                    width: parent.width; spacing: 8
-                    PkField { id: pw; sys: view.sys; width: parent.width - joinBtn.width - 8 - cancelBtn.width - 8; password: true; placeholder: "Password"
-                              onAccepted: wifiPage.connectTyped() }
-                    PkButton { id: cancelBtn; sys: view.sys; kind: "ghost"; text: "Cancel"; anchors.verticalCenter: parent.verticalCenter
-                               onClicked: { wifiPage.passwordFor = ""; view.sys.holdOpen = false; } }
-                    PkButton { id: joinBtn; sys: view.sys; kind: "primary"; text: "Join"; anchors.verticalCenter: parent.verticalCenter
-                               onClicked: wifiPage.connectTyped() }
+                PkField { id: pw; sys: view.sys; width: parent.width; password: !showPw.selected
+                          placeholder: wifiPage.other ? "Password (empty for an open network)" : "Password"
+                          onAccepted: wifiPage.connectTyped() }
+                PkText { sys: view.sys; visible: wifiPage.otherError !== ""; width: parent.width; wrapMode: Text.Wrap; text: wifiPage.otherError; color: view.t.accentText }
+                Item {
+                    width: parent.width; height: 34
+                    PkIconButton { id: showPw; sys: view.sys; anchors.verticalCenter: parent.verticalCenter; icon: selected ? "eye" : "eye-slash"; size: view.t.iSm
+                                   onClicked: selected = !selected }
+                    PkText { sys: view.sys; role: "sub"; anchors.left: showPw.right; anchors.leftMargin: 4; anchors.verticalCenter: parent.verticalCenter
+                             text: showPw.selected ? "Hide password" : "Show password" }
+                    Row {
+                        anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; spacing: 8
+                        PkButton { sys: view.sys; kind: "ghost"; text: "Cancel"; onClicked: wifiPage.cancelJoin() }
+                        PkButton { sys: view.sys; kind: "primary"; text: hidden.running ? "Joining…" : "Join"; enabled: !hidden.running; onClicked: wifiPage.connectTyped() }
+                    }
                 }
             }
-            Timer { id: pwFocus; interval: 80; onTriggered: wifiPage.passwordSecurity === "eap" ? user.focusIn() : pw.focusIn() }
+            Timer { id: pwFocus; interval: 80; onTriggered: wifiPage.other ? ssidField.focusIn() : wifiPage.passwordSecurity === "eap" ? user.focusIn() : pw.focusIn() }
         }
         PkText { sys: view.sys; visible: view.pg === "wifi" && !!view.sys.wifiError; x: 6; width: parent.width - 12; wrapMode: Text.Wrap
                  text: view.sys.wifiError || ""; color: view.t.accentText }
 
-        PkSection {
-            sys: view.sys; width: parent.width; visible: view.pg === "wifi"
-            title: view.sys.wifiNetworks.count === 0 ? "" : "Networks"
-            PkRow { sys: view.sys; visible: view.sys.wifiNetworks.count === 0; dim: true
-                    title: view.sys.wifiBusy ? "Searching…" : view.sys.wifiOn ? "No networks found" : "Wi-Fi is off" }
-            Repeater {
-                model: view.sys.wifiNetworks
-                delegate: PkRow {
-                    id: net
-                    required property var model
-                    readonly property bool connecting: view.sys.wifiConnectingSsid.length > 0 && model.ssid === view.sys.wifiConnectingSsid
-                    sys: view.sys; interactive: true
-                    hot: model.connected
-                    title: model.ssid
-                    sub: model.connected ? "Connected" : connecting ? "Connecting…" : model.known ? "Saved" : ""
-                    PkIcon { sys: view.sys; visible: net.model.security !== "open"; name: "lock-simple"; size: 14; color: view.t.muted }
-                    PkIcon { sys: view.sys; name: view.wifiIcon(net.model.quality); filled: net.model.connected; size: view.t.iSm
-                             color: net.model.connected ? view.t.fg : view.t.soft }
-                    PkIcon { sys: view.sys; visible: net.model.connected; name: "check"; size: view.t.iSm; color: view.t.fg }
-                    onClicked: {
-                        if (model.connected || connecting) return;
-                        if (model.security === "open" || model.known) { view.sys.connectWifi(model.ssid, ""); return; }
-                        wifiPage.passwordFor = model.ssid; wifiPage.passwordSecurity = model.security;
-                        view.sys.holdOpen = true; pwFocus.restart();
-                    }
-                    MouseArea {
-                        parent: net; anchors.fill: parent; acceptedButtons: Qt.RightButton
-                        onClicked: {
-                            if (!net.model.connected && !net.model.known) return;
-                            wifiPage.menuSsid = net.model.ssid; wifiPage.menuConnected = net.model.connected; wifiPage.menuKnown = net.model.known;
-                            view.sys.page = "netmenu";
-                        }
-                    }
+        // ---- every other network, in a list that scrolls inside the island
+        Flickable {
+            id: netList
+            visible: view.pg === "wifi" && wifiPage.on
+            width: parent.width
+            readonly property int room: (view.sys.pageMaxH || 545) - wifiHead.height - view.t.groupGap
+                                        - (hero.visible ? hero.height + view.t.groupGap : 0)
+                                        - (joinCard.visible ? joinCard.height + view.t.groupGap : 0)
+            height: Math.max(120, Math.min(contentHeight, room))
+            contentHeight: listCol.implicitHeight
+            clip: true; boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Column {
+                id: listCol
+                width: parent.width
+                spacing: view.t.groupGap
+                PkSection {
+                    sys: view.sys; width: parent.width; title: "Saved"; visible: wifiPage.saved.length > 0
+                    Repeater { model: wifiPage.saved; delegate: netRow }
+                }
+                PkSection {
+                    sys: view.sys; width: parent.width
+                    title: wifiPage.saved.length > 0 || hero.visible ? "Other networks" : "Networks"
+                    PkRow { sys: view.sys; visible: wifiPage.others.length === 0; dim: true
+                            title: view.sys.wifiBusy ? "Searching…" : "No other networks nearby" }
+                    Repeater { model: wifiPage.others; delegate: netRow }
+                    PkRow { sys: view.sys; icon: "plus"; title: "Other network…"; interactive: true; visible: !wifiPage.other
+                            onClicked: { wifiPage.passwordFor = ""; wifiPage.other = true; view.sys.holdOpen = true; pwFocus.restart(); } }
+                }
+            }
+            // a soft edge where the list continues
+            Rectangle {
+                parent: netList; visible: netList.interactive && !netList.atYEnd
+                anchors.bottom: parent.bottom; width: parent.width; height: 36
+                gradient: Gradient {
+                    GradientStop { position: 0; color: "transparent" }
+                    GradientStop { position: 1; color: "#000000" }
                 }
             }
         }
-        PkText { sys: view.sys; visible: view.pg === "wifi" && view.sys.wifiNetworks.count > 0; x: 6; role: "sub"
-                 text: "Right-click a saved network to disconnect or forget it." }
+        Component {
+            id: netRow
+            PkRow {
+                id: net
+                required property var modelData
+                readonly property bool connecting: modelData.ssid === view.sys.wifiConnectingSsid
+                sys: view.sys; interactive: true
+                title: modelData.ssid
+                sub: connecting ? "Connecting…" : modelData.security === "open" ? "Open network" : ""
+                onClicked: wifiPage.join(modelData)
+                PkIcon { sys: view.sys; anchors.verticalCenter: parent.verticalCenter; visible: net.modelData.security !== "open"
+                         name: "lock-simple"; size: 14; color: view.t.muted }
+                // signal: all three arcs dim, the strength lit over them
+                Item {
+                    anchors.verticalCenter: parent.verticalCenter; width: 20; height: 20
+                    PkIcon { sys: view.sys; anchors.centerIn: parent; name: "wifi-high"; size: view.t.iSm; color: view.t.faint }
+                    PkIcon { sys: view.sys; anchors.centerIn: parent; name: view.wifiIcon(net.modelData.quality); size: view.t.iSm; color: view.t.fg }
+                }
+                PkIconButton { sys: view.sys; anchors.verticalCenter: parent.verticalCenter; visible: net.modelData.known; icon: "info"; size: view.t.iSm
+                               onClicked: wifiPage.details(net.modelData.ssid, false, true) }
+            }
+        }
     }
 
     // ------------------------------------------------------------ Bluetooth
@@ -589,40 +758,95 @@ Item {
     Page {
         id: batteryPage
         name: "battery"
-        PkHeader { sys: view.sys; width: parent.width; title: "Battery"; back: true; onBackClicked: view.goBack() }
-        PkCard {
-            sys: view.sys; width: parent.width; height: 118
-            Row {
-                x: 16; y: 18; spacing: 6
-                DotText { value: String(view.sys.batteryPct); size: 38; color: view.sys.batteryPct <= 15 && !view.sys.acOnline ? view.t.accentText : view.t.fg }
-                PkText { sys: view.sys; role: "sub"; text: "%"; anchors.bottom: parent.bottom }
+        PkHeader { id: batHead; sys: view.sys; width: parent.width; title: "Battery"; back: true; onBackClicked: view.goBack() }
+        // everything under the header scrolls inside the island
+        Flickable {
+            id: batScroll
+            width: parent.width
+            height: Math.min(contentHeight, (view.sys.pageMaxH || 545) - batHead.height - view.t.groupGap)
+            contentHeight: batCol.implicitHeight
+            clip: true; boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Column {
+                id: batCol
+                width: parent.width
+                spacing: view.t.groupGap
+            PkCard {
+                sys: view.sys; width: parent.width; height: 118
+                Row {
+                    x: 16; y: 18; spacing: 6
+                    DotText { value: String(view.sys.batteryPct); size: 38; color: view.sys.batteryPct <= 15 && !view.sys.acOnline ? view.t.accentText : view.t.fg }
+                    PkText { sys: view.sys; role: "sub"; text: "%"; anchors.bottom: parent.bottom }
+                }
+                Column {
+                    anchors.right: parent.right; anchors.rightMargin: 16; y: 20; spacing: 3
+                    PkText { sys: view.sys; role: "label"; anchors.right: parent.right
+                             text: view.sys.batteryCharging ? "Charging" : view.sys.acOnline ? "Plugged in" : "On battery" }
+                    PkText { sys: view.sys; role: "sub"; anchors.right: parent.right; visible: view.batteryTime !== ""
+                             text: view.batteryTime + (view.sys.batteryCharging ? " to full" : " left") }
+                }
+                PkDotBar { sys: view.sys; x: 16; anchors.bottom: parent.bottom; anchors.bottomMargin: 18
+                           n: 24; level: view.sys.batteryPct / 100; low: view.sys.batteryPct <= 15 && !view.sys.acOnline }
             }
             Column {
-                anchors.right: parent.right; anchors.rightMargin: 16; y: 20; spacing: 3
-                PkText { sys: view.sys; role: "label"; anchors.right: parent.right
-                         text: view.sys.batteryCharging ? "Charging" : view.sys.acOnline ? "Plugged in" : "On battery" }
-                PkText { sys: view.sys; role: "sub"; anchors.right: parent.right; visible: view.batteryTime !== ""
-                         text: view.batteryTime + (view.sys.batteryCharging ? " to full" : " left") }
+                width: parent.width; spacing: 8; visible: view.sys.showPowerProfiles
+                PkText { sys: view.sys; role: "caption"; x: 6; text: "Power mode" }
+                PkSegmented {
+                    sys: view.sys; width: parent.width
+                    options: [{ id: "power-saver", text: "Saver" }, { id: "balanced", text: "Balanced" }, { id: "performance", text: "Performance" }]
+                    value: view.sys.powerProfile
+                    onPicked: id => view.sys.setPowerProfile(id)
+                }
             }
-            PkDotBar { sys: view.sys; x: 16; anchors.bottom: parent.bottom; anchors.bottomMargin: 18
-                       n: 24; level: view.sys.batteryPct / 100; low: view.sys.batteryPct <= 15 && !view.sys.acOnline }
-        }
-        Column {
-            width: parent.width; spacing: 8; visible: view.sys.showPowerProfiles
-            PkText { sys: view.sys; role: "caption"; x: 6; text: "Power mode" }
-            PkSegmented {
-                sys: view.sys; width: parent.width
-                options: [{ id: "power-saver", text: "Saver" }, { id: "balanced", text: "Balanced" }, { id: "performance", text: "Performance" }]
-                value: view.sys.powerProfile
-                onPicked: id => view.sys.setPowerProfile(id)
+            // what the selected mode actually does (TLP sets the CPU and Samsung's firmware profile;
+            // scripts/custom/power-mode.sh the refresh rate and NVIDIA Dynamic Boost)
+            PkSection {
+                id: modeSec
+                sys: view.sys; width: parent.width; visible: view.sys.showPowerProfiles
+                readonly property string m: view.sys.powerProfile
+                readonly property bool sixty: m === "power-saver" && view.sys.cfg.pkSaverHz
+                PkRow { sys: view.sys; icon: "monitor"; title: modeSec.sixty ? "Screen at 60 Hz" : "Screen at 120 Hz"
+                        sub: modeSec.sixty ? "Half the frames: less work for the GPU and CPU" : "Smooth motion; drops toward 48 Hz on a still screen" }
+                PkRow { sys: view.sys; icon: "fan"
+                        title: modeSec.m === "performance" ? "Fans: performance" : modeSec.m === "power-saver" ? "Fans: quiet" : "Fans: balanced"
+                        sub: modeSec.m === "performance" ? "Samsung's performance profile: higher power limits, fans spin up sooner"
+                           : modeSec.m === "power-saver" ? "Samsung's quiet profile: lower power limits, fans stay low"
+                           : "Samsung's balanced profile" }
+                PkRow { sys: view.sys; icon: "cpu"
+                        title: modeSec.m === "power-saver" ? "Processor: saving" : modeSec.m === "performance" ? "Processor: full speed" : "Processor: balanced"
+                        sub: modeSec.m === "power-saver" ? "Turbo boost off, prefers efficiency" : modeSec.m === "performance" ? "Turbo boost on, prefers speed" : "Turbo boost on, leans to efficiency" }
+                PkRow { sys: view.sys; icon: "graphics-card"; visible: boostUnit.ok
+                        title: modeSec.m === "performance" ? "Graphics: Dynamic Boost on" : "Graphics: Dynamic Boost off"
+                        sub: modeSec.m === "performance" ? "On AC the GPU can borrow the CPU's power, up to 60 W"
+                           : "GPU stays at its 35 W limit and can sleep when idle"
+                        FileView { id: boostUnit; property bool ok: false; path: "/usr/lib/systemd/system/nvidia-powerd.service"
+                                   printErrors: false; onLoaded: ok = true } }
+                PkRow {
+                    sys: view.sys; title: "60 Hz in Saver"
+                    PkToggle { sys: view.sys; anchors.verticalCenter: parent.verticalCenter; on: !!view.sys.cfg.pkSaverHz
+                               onToggled: on => { view.sys.cfg.pkSaverHz = on; view.sys.saveCfg(); view.sys.applyPowerMode(); } }
+                }
             }
-        }
-        PkSection {
-            sys: view.sys; width: parent.width; title: "Details"; visible: view.sys.batteryPresent
-            PkRow { sys: view.sys; title: "Capacity"; visible: view.sys.batteryCapacity > 0; value: Number(view.sys.batteryCapacity).toFixed(1) + " Wh" }
-            PkRow { sys: view.sys; title: "Health"; visible: view.sys.batteryHealth > 0; value: Math.round(view.sys.batteryHealth) + "%" }
-            PkRow { sys: view.sys; title: view.sys.batteryCharging ? "Charging at" : "Using"; visible: Math.abs(view.sys.batteryRate) > 0.05
-                    value: Math.abs(view.sys.batteryRate).toFixed(1) + " W" }
+            PkSection {
+                sys: view.sys; width: parent.width; title: "Details"; visible: view.sys.batteryPresent
+                PkRow { sys: view.sys; title: "Capacity"; visible: view.sys.batteryCapacity > 0; value: Number(view.sys.batteryCapacity).toFixed(1) + " Wh" }
+                PkRow { sys: view.sys; title: "Health"; visible: view.sys.batteryHealth > 0; value: Math.round(view.sys.batteryHealth) + "%" }
+                PkRow { sys: view.sys; title: view.sys.batteryCharging ? "Charging at" : "Using"; visible: Math.abs(view.sys.batteryRate) > 0.05
+                        value: Math.abs(view.sys.batteryRate).toFixed(1) + " W" }
+                PkRow { sys: view.sys; title: "Charging stops at"; visible: chargeLimit.limit > 0 && chargeLimit.limit < 100
+                        value: chargeLimit.limit + "%"
+                        FileView { id: chargeLimit; property int limit: 0; path: "/sys/class/power_supply/BAT1/charge_control_end_threshold"
+                                   printErrors: false; onLoaded: limit = parseInt(text()) || 0 } }
+            }
+            }
+            Rectangle {
+                parent: batScroll; visible: batScroll.interactive && !batScroll.atYEnd
+                anchors.bottom: parent.bottom; width: parent.width; height: 36
+                gradient: Gradient {
+                    GradientStop { position: 0; color: "transparent" }
+                    GradientStop { position: 1; color: "#000000" }
+                }
+            }
         }
     }
 
@@ -637,31 +861,67 @@ Item {
         QsMenuOpener { id: menuOpener; menu: trayPage.handle }
         PkHeader {
             sys: view.sys; width: parent.width; back: true; onBackClicked: view.goBack()
-            title: trayPage.chain.length ? (trayPage.chain[trayPage.chain.length - 1].text || "Menu")
+            title: trayPage.chain.length ? String(trayPage.chain[trayPage.chain.length - 1].text || "Menu").replace(/&(?!&)/g, "")
                  : view.sys.trayMenuItem ? (view.sys.trayMenuItem.tooltipTitle || view.sys.trayMenuItem.title || "Menu") : "Menu"
+            Image { anchors.verticalCenter: parent.verticalCenter; width: 22; height: 22; visible: status === Image.Ready
+                    source: view.sys.trayMenuItem ? view.sys.trayMenuItem.icon : ""; sourceSize: Qt.size(44, 44); smooth: true; asynchronous: true }
         }
-        PkSection {
-            sys: view.sys; width: parent.width
-            PkRow { sys: view.sys; dim: true; visible: menuOpener.children.values.length === 0; title: "This menu is empty" }
-            Repeater {
-                model: menuOpener.children
-                delegate: Item {
-                    id: me
-                    required property var modelData
-                    width: parent ? parent.width : 0
-                    height: modelData.isSeparator ? 9 : entry.implicitHeight
-                    PkRow {
-                        id: entry
-                        visible: !me.modelData.isSeparator
-                        sys: view.sys; width: parent.width
-                        interactive: me.modelData.enabled; dim: !me.modelData.enabled
-                        title: String(me.modelData.text || "").replace(/&(?!&)/g, "")
-                        caret: me.modelData.hasChildren
-                        PkIcon { sys: view.sys; visible: me.modelData.buttonType !== QsMenuButtonType.None && me.modelData.checkState === Qt.Checked
-                                 name: "check"; size: view.t.iSm }
-                        onClicked: {
-                            if (me.modelData.hasChildren) { var c = trayPage.chain.slice(); c.push(me.modelData); trayPage.chain = c; return; }
-                            me.modelData.triggered(); view.sys.collapse();
+        // the app's menu, compact: separators as hairlines, a left column for checks or the
+        // items' own icons when any has one, arrows for submenus, status lines as captions
+        readonly property var entries: menuOpener.children ? menuOpener.children.values : []
+        readonly property bool anyLead: entries.some(e => !e.isSeparator && ((e.icon && String(e.icon) !== "") || e.buttonType !== QsMenuButtonType.None))
+        Rectangle {
+            width: parent.width; height: menuCol.implicitHeight + 12
+            radius: view.t.rSurface; color: view.t.surface
+            Column {
+                id: menuCol
+                x: 6; y: 6; width: parent.width - 12
+                PkRow { sys: view.sys; dim: true; visible: trayPage.entries.length === 0; title: "This menu is empty" }
+                Repeater {
+                    model: trayPage.entries
+                    delegate: Item {
+                        id: me
+                        required property var modelData
+                        readonly property bool sep: modelData.isSeparator
+                        readonly property bool info: !modelData.enabled && !modelData.hasChildren && !sep
+                        readonly property bool checkable: modelData.buttonType !== QsMenuButtonType.None
+                        readonly property string label: String(modelData.text || "").replace(/&(?!&)/g, "").replace(/&&/g, "&")
+                        width: parent ? parent.width : 0
+                        height: sep ? 13 : info ? 30 : 38
+                        visible: sep || label !== "" || !!modelData.icon
+                        Rectangle { visible: me.sep; x: 10; width: parent.width - 20; height: 1; anchors.verticalCenter: parent.verticalCenter; color: view.t.veil(0.1) }
+                        Rectangle { visible: !me.sep; anchors.fill: parent; radius: view.t.rSmall
+                                    color: meMa.containsMouse && me.modelData.enabled ? view.t.hover : "transparent"
+                                    Behavior on color { ColorAnimation { duration: view.t.dFast } } }
+                        Item {
+                            visible: !me.sep && trayPage.anyLead
+                            x: 12; width: 18; height: 18; anchors.verticalCenter: parent.verticalCenter
+                            PkIcon { sys: view.sys; anchors.centerIn: parent; size: 14; color: view.t.fg
+                                     visible: me.checkable && me.modelData.checkState === Qt.Checked
+                                     name: me.modelData.buttonType === QsMenuButtonType.RadioButton ? "radio-button" : "check"; filled: true }
+                            Image { anchors.fill: parent; visible: !me.checkable && status === Image.Ready
+                                    source: me.modelData.icon || ""; sourceSize: Qt.size(36, 36); smooth: true; asynchronous: true
+                                    opacity: me.modelData.enabled ? 1 : 0.4 }
+                        }
+                        Text {
+                            visible: !me.sep
+                            x: trayPage.anyLead ? 42 : 12; width: parent.width - x - 34
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: me.label; elide: Text.ElideRight
+                            color: me.info ? view.t.muted : me.modelData.enabled ? view.t.fg : view.t.faint
+                            font { family: view.t.font; pixelSize: me.info ? view.t.tLabel : view.t.tBody }
+                        }
+                        PkIcon { sys: view.sys; visible: me.modelData.hasChildren; anchors.right: parent.right; anchors.rightMargin: 12
+                                 anchors.verticalCenter: parent.verticalCenter; name: "caret-right"; size: 13; color: view.t.muted }
+                        MouseArea {
+                            id: meMa
+                            anchors.fill: parent
+                            enabled: !me.sep && me.modelData.enabled
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (me.modelData.hasChildren) { var c = trayPage.chain.slice(); c.push(me.modelData); trayPage.chain = c; return; }
+                                me.modelData.triggered(); view.sys.collapse();
+                            }
                         }
                     }
                 }

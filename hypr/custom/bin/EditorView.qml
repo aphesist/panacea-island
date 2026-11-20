@@ -216,6 +216,7 @@ Item {
                     font { family: view.t.font; pixelSize: view.t.tBody }
                     tabStopDistance: 4 * fontMetrics.averageCharacterWidth
                     readOnly: view.loading || view.error !== ""
+                    ContextMenu.menu: PkEditMenu { sys: view.sys; target: ta }   // the kit's menu, not Qt's grey one
                     onTextChanged: if (!view.setting) { view.sys.editorDirty = true; view.sys.editorBuffer = text; }
                     Keys.onPressed: e => {
                         if (e.modifiers & Qt.ControlModifier) {

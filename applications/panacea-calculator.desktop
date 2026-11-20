@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Calculator
+GenericName=Calculator
+Comment=A calculator in the island
+Icon=panacea-calculator
+Exec=sh -c "qs -p \\$HOME/.config/panacea ipc call pill calc"
+Terminal=false
+Categories=Utility;Calculator;
+Keywords=calc;math;sum;
+StartupNotify=false
