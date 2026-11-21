@@ -12,7 +12,7 @@ back on its own). Re-run by panacea-portal-patch.path after Panacea updates.
 import os, sys
 
 D = os.path.expanduser("~/.config/panacea")
-VERSION = "v62"
+VERSION = "v63"
 TAG_PREFIX = "// panacea-local portal patch "
 TAG = TAG_PREFIX + VERSION
 
@@ -1548,6 +1548,55 @@ ISLAND_SETTINGS += [
      '            from: 160; to: 640; step: 4\n'),
     ('            label: page.sys.tr("Ширина раскрытого острова")\n', '            label: "Open width"\n'),
     ('            label: page.sys.tr("Высота раскрытого острова")\n', '            label: "Open height"\n'),
+]
+
+
+# ---- Battery charge limit (v63): Settings > System > Battery. The Samsung firmware keeps the limit
+# itself (samsung-galaxybook: BAT1/charge_control_end_threshold); system/udev/90-panacea-charge-limit.rules
+# makes it writable for wheel, so no password; without the rule pkexec asks.
+SYSTEM += [
+    ("    // ------------------------------------------------------------- машина\n"
+     "    SetCard {\n",
+     "    // " + TAG + ": battery charge limit\n"
+     "    property string chargeFile: \"\"\n"
+     "    property string chargeLimit: \"\"\n"
+     "    Process {\n"
+     "        id: pChargeFind\n"
+     "        running: true\n"
+     "        command: [\"sh\", \"-c\", \"ls /sys/class/power_supply/BAT*/charge_control_end_threshold 2>/dev/null | head -1\"]\n"
+     "        stdout: StdioCollector { onStreamFinished: { page.chargeFile = text.trim(); if (page.chargeFile) pChargeRead.running = true; } }\n"
+     "    }\n"
+     "    Process {\n"
+     "        id: pChargeRead\n"
+     "        command: [\"cat\", page.chargeFile]\n"
+     "        stdout: StdioCollector { onStreamFinished: page.chargeLimit = text.trim() }\n"
+     "    }\n"
+     "    Process { id: pChargeSet; onRunningChanged: if (!running) pChargeRead.running = true }\n"
+     "    SetCard {\n"
+     "        sys: page.sys\n"
+     "        visible: page.chargeFile !== \"\"\n"
+     "        SetLabel { sys: page.sys; text: \"Battery\" }\n"
+     "        SetSelect {\n"
+     "            sys: page.sys\n"
+     "            label: \"Stop charging at\"\n"
+     "            options: [{ id: \"60\", text: \"60%\" }, { id: \"80\", text: \"80%\" }, { id: \"90\", text: \"90%\" }, { id: \"100\", text: \"100%\" }]\n"
+     "            value: page.chargeLimit\n"
+     "            onPicked: id => {\n"
+     "                page.chargeLimit = id;\n"
+     "                pChargeSet.command = [\"sh\", \"-c\", 'echo \"$1\" > \"$2\" 2>/dev/null || echo \"$1\" | pkexec tee \"$2\" >/dev/null', \"_\", id, page.chargeFile];\n"
+     "                pChargeSet.running = true;\n"
+     "            }\n"
+     "        }\n"
+     "        Text {\n"
+     "            Layout.fillWidth: true\n"
+     "            wrapMode: Text.WordWrap\n"
+     "            text: \"A lower limit keeps the battery healthy when the laptop stays plugged in. The laptop remembers it across reboots.\"\n"
+     "            color: page.sys.pk.muted\n"
+     "            font { family: page.sys.pk.font; pixelSize: page.sys.pk.tCaption }\n"
+     "        }\n"
+     "    }\n\n"
+     "    // ------------------------------------------------------------- машина\n"
+     "    SetCard {\n"),
 ]
 
 

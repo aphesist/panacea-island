@@ -72,6 +72,15 @@ if systemctl cat nvidia-powerd.service >/dev/null 2>&1 && [ ! -e /etc/polkit-1/r
         /etc/polkit-1/rules.d/50-panacea-nvidia-powerd.rules || echo "  skipped: power modes still work, without Dynamic Boost"
 fi
 
+if ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1 && [ ! -e /etc/udev/rules.d/90-panacea-charge-limit.rules ]; then
+    say "Battery charge limit without a password (optional, asks for your password once)"
+    echo "  Settings > System > Battery sets where charging stops. A udev rule lets wheel users"
+    echo "  write that one setting; without it the island asks for your password each time."
+    read -rp "  Install the rule now? [y/N] " a || a=
+    [ "${a,,}" = y ] && pkexec sh -c "install -Dm644 '$HERE/system/udev/90-panacea-charge-limit.rules' /etc/udev/rules.d/90-panacea-charge-limit.rules && udevadm control --reload && udevadm trigger --action=change --subsystem-match=power_supply" \
+        || echo "  skipped: the setting still works, with a password prompt"
+fi
+
 echo
 [ -d "$BK" ] && echo "Backups of replaced files: $BK"
 cat <<'EOF'
