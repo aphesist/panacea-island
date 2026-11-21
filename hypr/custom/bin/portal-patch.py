@@ -12,7 +12,7 @@ back on its own). Re-run by panacea-portal-patch.path after Panacea updates.
 import os, sys
 
 D = os.path.expanduser("~/.config/panacea")
-VERSION = "v63"
+VERSION = "v64"
 TAG_PREFIX = "// panacea-local portal patch "
 TAG = TAG_PREFIX + VERSION
 
@@ -1600,6 +1600,77 @@ SYSTEM += [
 ]
 
 
+# ---- mpv on the island (v64): while an mpv window is focused on the island's screen (not
+# fullscreen), the collapsed island is its control bar (MpvBar.qml: idle pill, grows down on hover,
+# menus inside). mpv hides its own controls in a window and opens a socket per pid
+# (~/.config/mpv/scripts/panacea-island.lua). Found by the same window watch as Zen-only mode.
+SHELL += [
+    ("    property bool zenSolo: false\n",
+     "    property bool zenSolo: false\n"
+     "    property int mpvPid: 0              " + TAG + ": the focused mpv window's pid (0: none)\n"
+     "    readonly property bool mpvShown: mpvPid > 0 && !expanded && !settingsMode && !pillSide && !pillHidden && !wallsOpen\n"
+     "        && !toastActive && !osdActive && !btToastActive && !wifiToastActive && !acToastActive\n"
+     "        && !recPickActive && !voxActive && !fileOverIsland\n"),
+    ("    readonly property bool zenBarShown: zenSolo && !expanded",
+     "    readonly property bool zenBarShown: zenSolo && mpvPid <= 0 && !expanded"),
+    ("        root.zenSolo = solo;\n",
+     "        root.zenSolo = solo;\n"
+     "        // " + TAG + ": mpv focused on this screen's desktop, windowed -> the island drives it\n"
+     "        var mpid = 0;\n"
+     "        if (mon && mon.activeWorkspace && !(mon.specialWorkspace && mon.specialWorkspace.id))\n"
+     "            for (i = 0; i < cl.length; i++) {\n"
+     "                var w = cl[i];\n"
+     "                if (w[\"class\"] === \"mpv\" && w.focusHistoryID === 0 && w.mapped && !w.hidden && !w.fullscreen\n"
+     "                    && w.monitor === mon.id && w.workspace && w.workspace.id === mon.activeWorkspace.id) mpid = w.pid;\n"
+     "            }\n"
+     "        root.mpvPid = mpid;\n"),
+    ('                || (root.zenMode === "island" && /^activewindow$/.test(ev.name)))',
+     '                || /^(activewindow|fullscreen)$/.test(ev.name))   ' + TAG),
+    ("                : root.zenBarShown ? capsule.evenUp(zenBarItem.implicitWidth)   " + TAG + ": Zen-only mode\n",
+     "                : root.mpvShown ? capsule.evenUp(mpvBarItem.implicitWidth)   " + TAG + ": mpv controls\n"
+     "                : root.zenBarShown ? capsule.evenUp(zenBarItem.implicitWidth)   " + TAG + ": Zen-only mode\n"),
+    ("root.zenBarShown ? zenBarItem.implicitHeight : root.pillH   " + TAG,
+     "root.mpvShown ? mpvBarItem.implicitHeight : root.zenBarShown ? zenBarItem.implicitHeight : root.pillH   " + TAG),
+    ("                     && !root.osdActive && !root.toastActive && !root.zenBarShown   " + TAG + "\n            opacity: root.pillSide ? 0 : (visible ? 1 : 0)\n",
+     "                     && !root.osdActive && !root.toastActive && !root.zenBarShown && !root.mpvShown   " + TAG + "\n            opacity: root.pillSide ? 0 : (visible ? 1 : 0)\n"),
+    ("!root.pillSide && !root.zenBarShown }   " + TAG,
+     "!root.pillSide && !root.zenBarShown && !root.mpvShown }   " + TAG),
+    ("|| root.voxActive || root.zenBarShown) return;   " + TAG,
+     "|| root.voxActive || root.zenBarShown || root.mpvShown) return;   " + TAG),
+    ("                     && !root.zenBarShown   " + TAG + "\n            cursorShape: Qt.PointingHandCursor\n            onClicked: capsule.openPanel()\n",
+     "                     && !root.zenBarShown && !root.mpvShown   " + TAG + "\n            cursorShape: Qt.PointingHandCursor\n            onClicked: capsule.openPanel()\n"),
+    ("        // " + TAG + ": Zen-only mode, the address bar\n        ZenBar {\n",
+     "        // " + TAG + ": mpv's controls (MpvBar.qml), on the island's animated shape like the Zen bar\n"
+     "        MpvBar {\n"
+     "            id: mpvBarItem\n"
+     "            anchors.top: parent.top\n"
+     "            anchors.horizontalCenter: parent.horizontalCenter\n"
+     "            width: parent.width\n"
+     "            height: parent.height\n"
+     "            z: 121\n"
+     "            sys: root\n"
+     "            pid: root.mpvPid\n"
+     "            clip: true\n"
+     "            visible: opacity > 0.01\n"
+     "            opacity: 0\n"
+     "            Component.onCompleted: opacity = root.mpvShown ? 1 : 0\n"
+     "            Connections {\n"
+     "                target: root\n"
+     "                function onMpvShownChanged() {\n"
+     "                    if (root.mpvShown) mpvBarIn.restart();\n"
+     "                    else { mpvBarIn.stop(); mpvBarItem.opacity = 0; }\n"
+     "                }\n"
+     "            }\n"
+     "            SequentialAnimation {\n"
+     "                id: mpvBarIn\n"
+     "                PauseAnimation { duration: Math.round(root.animMs * 0.45) }\n"
+     "                NumberAnimation { target: mpvBarItem; property: \"opacity\"; to: 1; duration: root.animFast; easing.type: Easing.OutCubic }\n"
+     "            }\n"
+     "        }\n\n"
+     "        // " + TAG + ": Zen-only mode, the address bar\n        ZenBar {\n"),
+]
+
+
 def plan(path, repl):
     """-> (new text, pristine text to save or None), or None if an anchor is missing."""
     cur = open(path, encoding="utf-8").read()
@@ -1645,7 +1716,7 @@ def main():
     changed = False
     here = os.path.dirname(os.path.abspath(__file__))
     kit = sorted(n for n in os.listdir(os.path.join(here, "..", "ui")) if n.startswith("Pk") and n.endswith((".qml", ".js"))) if os.path.isdir(os.path.join(here, "..", "ui")) else []
-    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "ZenTabView.qml", "IslandToasts.qml", "LauncherPage.qml", "AuthPage.qml", "VaultPage.qml", "VaultSavePage.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
+    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "MpvBar.qml", "MpvIconButton.qml", "ZenTabView.qml", "IslandToasts.qml", "LauncherPage.qml", "AuthPage.qml", "VaultPage.qml", "VaultSavePage.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
         src = os.path.join(here, name)
         if not os.path.exists(src):
             src = os.path.join(here, "..", "ui", name)   # the design kit (PkMorph)
