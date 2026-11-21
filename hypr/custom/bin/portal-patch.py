@@ -12,7 +12,7 @@ back on its own). Re-run by panacea-portal-patch.path after Panacea updates.
 import os, sys
 
 D = os.path.expanduser("~/.config/panacea")
-VERSION = "v60"
+VERSION = "v61"
 TAG_PREFIX = "// panacea-local portal patch "
 TAG = TAG_PREFIX + VERSION
 
@@ -1514,6 +1514,33 @@ SYSTEM += [
     ('"if [ -z \\"$gpu\\" ] && command -v nvidia-smi >/dev/null 2>&1; then " +',
      '"if false && command -v nvidia-smi >/dev/null 2>&1; then " +   // ' + TAG + ': nvidia-smi wakes the RTX'),
 ]
+
+# ---- Island sizes (v61): the collapsed island's width setting really sets it (Panacea floored it
+# at 420 px; the content still keeps its own minimum, nothing is cut), and the Sizes card shows
+# without "Detailed settings", with plain labels.
+SHELL += [
+    ("        readonly property int collapsedMin: Math.max(root.cfg.collapsedW, 420)\n",
+     "        readonly property int collapsedMin: root.cfg.collapsedW   " + TAG + ": no 420 px floor\n"),
+]
+ISLAND_SETTINGS += [
+    ("    // ------------------------------------------------------------- размеры\n"
+     "    SetCard {\n"
+     "        sys: page.sys\n"
+     "        visible: page.detailsOpen\n",
+     "    // ------------------------------------------------------------- размеры\n"
+     "    // " + TAG + ": sizes always shown\n"
+     "    SetCard {\n"
+     "        sys: page.sys\n"),
+    ('        SetLabel { sys: page.sys; text: page.sys.tr("Размеры") }\n', '        SetLabel { sys: page.sys; text: "Island size" }\n'),
+    ('            label: page.sys.tr("Высота панели")\n', '            label: "Island height"\n'),
+    ('            label: page.sys.tr("Ширина свёрнутого острова")\n'
+     '            from: 120; to: 640; step: 4\n',
+     '            label: "Collapsed width (grows to fit its content)"\n'
+     '            from: 160; to: 640; step: 4\n'),
+    ('            label: page.sys.tr("Ширина раскрытого острова")\n', '            label: "Open width"\n'),
+    ('            label: page.sys.tr("Высота раскрытого острова")\n', '            label: "Open height"\n'),
+]
+
 
 def plan(path, repl):
     """-> (new text, pristine text to save or None), or None if an anchor is missing."""

@@ -229,9 +229,12 @@ Item {
                     Loader {
                         id: pageLoader
                         Layout.fillWidth: true
+                        // read the section from `tab` itself: onTabChanged can run before the
+                        // `section` binding updates, which loaded the page you just left
                         function reload() {
-                            if (view.section.embed) setSource(view.section.page, { sys: view.sys, embedded: true });
-                            else setSource(view.section.page, { sys: view.sys });
+                            var sec = view.sections[Math.max(0, Math.min(view.sections.length - 1, view.tab))];
+                            if (sec.embed) setSource(sec.page, { sys: view.sys, embedded: true });
+                            else setSource(sec.page, { sys: view.sys });
                         }
                         Component.onCompleted: reload()
                     }

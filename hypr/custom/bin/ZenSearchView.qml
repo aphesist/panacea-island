@@ -122,7 +122,8 @@ FocusScope {
         var nt = view.newTab || !!forceNew;
         var typed = query.trim();
         if (!it && !typed) return;
-        if (!it || (!view.edited && !view.picked && typed)) it = { type: "url", url: typed };   // Enter on the untouched address: reload it
+        var stale = view.edited && view.asked !== view.suggestText();   // suggestions are for older text (fast Enter)
+        if (!it || (!view.edited && !view.picked && typed) || (stale && !view.picked)) it = { type: "url", url: typed };   // Enter on the untouched address: reload it
         if (view.claude) {
             var tgt = it.type === "launch" ? (it.text || typed) : (it.url || it.text || typed);
             if (tgt) view.sendClaude(tgt, it.type === "search" || it.type === "suggestion");
