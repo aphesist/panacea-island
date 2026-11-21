@@ -1,0 +1,11 @@
+#!/bin/sh
+# panacea-island: call one of the island's screens, for launchers and xdg-open.
+#   panacea-island <screen> [file]   e.g. media ~/x.png, edit notes.txt, files ~/Documents, settings
+# The .desktop entries call this instead of `sh -c "qs ... \"$1\""`: xdg-open's own Exec parser
+# (no GNOME/KDE) breaks on the nested quotes, so clicking a file never opened anything.
+fn="${1:?usage: panacea-island <screen> [file]}"; shift
+f="${1:-}"
+case "$f" in file://*) f=$(printf "%b" "$(printf "%s" "${f#file://}" | sed "s/%/\\\\x/g")") ;; esac   # a file:// URL -> its path
+if [ "$fn" = files ] && [ -n "$f" ]; then fn=filesAt; fi
+if [ -n "$f" ]; then exec qs -p "$HOME/.config/panacea" ipc call pill "$fn" "$f"
+else exec qs -p "$HOME/.config/panacea" ipc call pill "$fn"; fi

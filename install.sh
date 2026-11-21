@@ -34,6 +34,9 @@ fc-cache -f "$DATA/fonts" >/dev/null 2>&1 || true
 say "Helper scripts (panacea/scripts/custom)"
 for f in "$HERE"/panacea/scripts/custom/*; do put "${f#$HERE/}" "$CFG/${f#$HERE/}"; done
 
+say "panacea-island command (~/.local/bin): what the launchers and file links call"
+put bin/panacea-island "$HOME/.local/bin/panacea-island"
+
 say "The island's screens as apps in the launcher, with their icons; they replace Panacea's broken launchers"
 for f in "$HERE"/applications/*.desktop; do put "${f#$HERE/}" "$DATA/applications/$(basename "$f")"; done
 # Panacea's own launchers (panacea-files/-text/-media) call `qs -c <path>`, which never opens
