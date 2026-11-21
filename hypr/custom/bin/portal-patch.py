@@ -12,7 +12,7 @@ back on its own). Re-run by panacea-portal-patch.path after Panacea updates.
 import os, sys
 
 D = os.path.expanduser("~/.config/panacea")
-VERSION = "v61"
+VERSION = "v62"
 TAG_PREFIX = "// panacea-local portal patch "
 TAG = TAG_PREFIX + VERSION
 
@@ -828,11 +828,20 @@ SHELL += [
      "    WlrLayershell.namespace: \"panacea-workspaces\"\n"
      "    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None\n"
      "    visible: root.cfg.wsCorner && root.cfg.pillPos === \"top\" && !root.fullscreenActive && !root.pillHidden\n"
+     "    // OLED: the dots fade away 3 s after a workspace change and come back on the next one,\n"
+     "    // while the pointer is over the corner, or while the island is open (no still pixels)\n"
+     "    property bool wake: true\n"
+     "    Timer { id: wsCornerSleep; interval: 3000; running: true; onTriggered: wsCornerWin.wake = false }\n"
+     "    function poke() { wsCornerWin.wake = true; wsCornerSleep.restart(); }\n"
+     "    Connections { target: root; function onWsIdChanged() { wsCornerWin.poke(); } function onWsListChanged() { wsCornerWin.poke(); } }\n"
+     "    HoverHandler { id: wsCornerHover; onHoveredChanged: if (!hovered) wsCornerWin.poke() }\n"
      "    Row {\n"
      "        id: wsCornerRow\n"
      "        x: 22\n"
      "        anchors.verticalCenter: parent.verticalCenter\n"
      "        spacing: 8\n"
+     "        opacity: (wsCornerWin.wake || wsCornerHover.hovered || root.expanded) ? 1 : 0\n"
+     "        Behavior on opacity { NumberAnimation { duration: 900; easing.type: Easing.InOutSine } }\n"
      "        Repeater {\n"
      "            model: root.wsList\n"
      "            Rectangle {\n"
