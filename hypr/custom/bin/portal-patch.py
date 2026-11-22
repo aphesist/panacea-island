@@ -12,7 +12,7 @@ back on its own). Re-run by panacea-portal-patch.path after Panacea updates.
 import os, sys
 
 D = os.path.expanduser("~/.config/panacea")
-VERSION = "v64"
+VERSION = "v65"
 TAG_PREFIX = "// panacea-local portal patch "
 TAG = TAG_PREFIX + VERSION
 
@@ -188,7 +188,7 @@ SHELL = [
     # the page itself slides in from the side of the tab you picked, fading in
     ("            onLoaded: if (item) item.forceActiveFocus()\n",
      """            onLoaded: { if (item) item.forceActiveFocus(); pageEnter(); }   """ + TAG + """: page slide
-            readonly property var tabRank: ({ main: 0, chat: 1, zentab: 2, vpn: 3 })
+            readonly property var tabRank: ({ main: 0, chat: 1, zentab: 2, discord: 3, vpn: 4 })
             property string lastTabPage: ""
             onActiveChanged: if (!active) lastTabPage = ""
             transform: Translate { id: pageSlide }
@@ -642,7 +642,7 @@ SHELL += [
      '            anchors.fill: parent\n'
      '            z: 498\n'
      '            acceptedButtons: Qt.NoButton\n'
-     '            readonly property var order: ["main", "chat", "zentab", "vpn"]\n'
+     '            readonly property var order: ["main", "chat", "zentab"].concat(root.discordTabShown ? ["discord"] : []).concat(["vpn"])   // v65: Discord while shown\n'
      '            enabled: root.expanded && !root.settingsMode && order.indexOf(root.page) >= 0\n'
      '            property real acc: 0\n'
      '            property bool spent: false\n'
@@ -1047,7 +1047,7 @@ SHELL += [
 
 # ---- System screens (v38): island pages built from the kit. Each is a page name, a component
 # and an IPC call (`qs -p ~/.config/panacea ipc call pill <name>`).
-SCREENS = [("updates", "UpdatesView"), ("logs", "LogsView"), ("screen", "ScreenView"), ("editor", "EditorView"), ("startup", "StartupView"), ("calc", "CalcView")]
+SCREENS = [("updates", "UpdatesView"), ("logs", "LogsView"), ("screen", "ScreenView"), ("editor", "EditorView"), ("startup", "StartupView"), ("calc", "CalcView"), ("discord", "DiscordView")]
 SHELL += [
     ('                           : root.page === "agents"   ? agentsComp\n',
      ''.join('                           : root.page === "%s" ? %sComp   ' % (n, n) + TAG + '\n' for n, _ in SCREENS)
@@ -1297,19 +1297,19 @@ ISLAND_SETTINGS += [
 SHELL += [
     ('    function chooseAppStart(spec) {\n',
      '    readonly property bool tabsPage: ["zen", "auth", "quickfile", "vaultsave"].indexOf(page) < 0   // ' + TAG + ': tabs on top\n'
-     '    readonly property bool tabsExtra: tabsPage && ["main", "chat", "zentab"].indexOf(page) < 0\n'
+     '    readonly property bool tabsExtra: tabsPage && ["main", "chat", "zentab"].indexOf(page) < 0 && !(page === "discord" && discordTabShown)\n'
      '    readonly property int pageMaxH: cfg.expandedH - (tabsPage ? 75 : 30)\n'
      '    function pageTitle(p) {\n'
      '        return ({ vpn: "VPN", wifi: "Wi-Fi", bt: "Bluetooth", notif: "Notifications", audio: "Sound", power: "Power",\n'
      '                  record: "Record", cal: "Calendar", clip: "Clipboard", vault: "Vault", agents: "Agents", launcher: "Apps",\n'
      '                  updates: "Updates", logs: "Logs", screen: "Screen", editor: "Editor", startup: "Startup",\n'
-     '                  openwith: "Open with", netmenu: "Wi-Fi", traymenu: "Tray", battery: "Battery", calc: "Calculator" })[p] || (p ? p.charAt(0).toUpperCase() + p.slice(1) : "");\n'
+     '                  openwith: "Open with", netmenu: "Wi-Fi", traymenu: "Tray", battery: "Battery", calc: "Calculator", discord: "Discord" })[p] || (p ? p.charAt(0).toUpperCase() + p.slice(1) : "");\n'
      '    }\n'
      '    function pageIcon(p) {\n'
      '        return ({ vpn: "shield-check", wifi: "wifi-high", bt: "bluetooth", notif: "bell", audio: "speaker-high", power: "power",\n'
      '                  record: "record", cal: "calendar-blank", clip: "clipboard-text", vault: "vault", agents: "robot",\n'
      '                  launcher: "squares-four", updates: "package", logs: "scroll", screen: "selection", editor: "note-pencil",\n'
-     '                  startup: "rocket-launch", openwith: "app-window", netmenu: "wifi-high", traymenu: "dots-three", battery: "battery-high", calc: "calculator" })[p] || "circle";\n'
+     '                  startup: "rocket-launch", openwith: "app-window", netmenu: "wifi-high", traymenu: "dots-three", battery: "battery-high", calc: "calculator", discord: "discord-logo" })[p] || "circle";\n'
      '    }\n'
      '    function chooseAppStart(spec) {\n'),
     ('(root.page === "main" || root.page === "chat" || root.page === "zentab" || root.page === "vpn")', 'root.tabsPage', "all"),
@@ -1320,7 +1320,7 @@ SHELL += [
      '                property string shown: ""\n'
      '                // decided from the new page itself: root.tabsExtra may not have caught up yet when\n'
      '                // this runs, and then the tab kept the previous page\'s name ("Main")\n'
-     '                function extra(p) { return ["zen", "auth", "quickfile", "vaultsave", "main", "chat", "zentab"].indexOf(p) < 0; }\n'
+     '                function extra(p) { return ["zen", "auth", "quickfile", "vaultsave", "main", "chat", "zentab"].indexOf(p) < 0 && !(p === "discord" && root.discordTabShown); }\n'
      '                Connections { target: root; function onPageChanged() { if (pageTab.extra(root.page)) pageTab.shown = root.page; } }\n'
      '                Component.onCompleted: if (extra(root.page)) shown = root.page\n'
      '                width: root.tabsExtra ? pageTabRow.implicitWidth + 30 : 0\n'
@@ -1671,6 +1671,56 @@ SHELL += [
 ]
 
 
+# ---- Discord on the island (v65): Vesktop's voice call from the island. DiscordVoice.qml runs
+# scripts/custom/discord-bridge.mjs (Vesktop's local DevTools port, Vencord's stores) and is the
+# shell's `discord`; a Discord tab beside Home/Claude/Zen while in a call (DiscordView.qml); a
+# click-through overlay of who's talking in the top-right corner (DiscordOverlay.qml);
+# Settings > Discord (SetDiscord.qml). IPC: discord, discordMute, discordDeafen, discordLeave.
+SHELL += [
+    ("            property bool   islBattery: true    " + TAG + ": battery icon and number\n",
+     "            property bool   islBattery: true    " + TAG + ": battery icon and number\n"
+     "            property bool   discordEnabled: true       " + TAG + ": Discord (Vesktop) on the island\n"
+     "            property string discordTab: \"call\"         // call | open | off\n"
+     "            property bool   discordOverlay: true\n"
+     "            property string discordOverlayLayout: \"row\"  // row | list\n"
+     "            property string discordOverlayMode: \"all\"    // all | speaking\n"
+     "            property int    discordOverlaySize: 20\n"
+     "            property bool   discordOverlaySelf: true\n"
+     "            property bool   discordOverlayDim: true\n"
+     "            property bool   discordOverlayFull: false\n"
+     "            property string discordRing: \"green\"       // green | white\n"),
+    ("    property int mpvPid: 0              " + TAG + ": the focused mpv window's pid (0: none)\n",
+     "    property int mpvPid: 0              " + TAG + ": the focused mpv window's pid (0: none)\n"
+     "    DiscordVoice { id: discordVoice; sys: root }   " + TAG + ": Discord (Vesktop) voice\n"
+     "    readonly property var discord: discordVoice\n"
+     "    readonly property bool discordTabShown: cfg.discordEnabled && (cfg.discordTab === \"open\" ? discordVoice.running\n"
+     "                                                                   : cfg.discordTab !== \"off\" && discordVoice.inCall)\n"
+     "    onDiscordTabShownChanged: if (!discordTabShown && page === \"discord\") page = \"main\"\n"),
+    ('{page:"zentab", title:"Zen", icon:0xF059F}]',
+     '{page:"zentab", title:"Zen", icon:0xF059F}].concat(root.discordTabShown ? [{page:"discord", title:"Discord", icon:0}] : [])'),
+    ("""                                source: Qt.resolvedUrl("zen-logo.svg")
+                                opacity: root.page === modelData.page ? 1 : 0.55 }
+""", """                                source: Qt.resolvedUrl("zen-logo.svg")
+                                opacity: root.page === modelData.page ? 1 : 0.55 }
+                        // """ + TAG + """: the Discord tab: its logo; a red dot while you're muted
+                        PkIcon { visible: modelData.page === "discord"; sys: root; anchors.verticalCenter: parent.verticalCenter
+                                 name: "discord-logo"; size: 18; filled: true
+                                 color: root.page === modelData.page ? root.colFg : root.colMuted
+                                 Rectangle { visible: root.discord.mute || root.discord.deaf; x: parent.width - 4; y: -2; width: 8; height: 8; radius: 4
+                                             color: root.pk.accent; border.width: 2; border.color: "#000000" } }
+"""),
+    ('        function open(): void { if (!root.expanded) root.togglePage("main"); }   ' + TAG + '\n',
+     '        function open(): void { if (!root.expanded) root.togglePage("main"); }   ' + TAG + '\n'
+     '        function discordMute(): void { root.discord.toggleMute(); }   ' + TAG + '\n'
+     '        function discordDeafen(): void { root.discord.toggleDeaf(); }\n'
+     '        function discordLeave(): void { root.discord.disconnect(); }\n'),
+    ("PanelWindow {\n    id: wallFadeWin\n",
+     "// " + TAG + ": who's in your Discord call, top-right corner (DiscordOverlay.qml)\n"
+     "DiscordOverlay { sys: root }\n\n"
+     "PanelWindow {\n    id: wallFadeWin\n"),
+]
+
+
 def plan(path, repl):
     """-> (new text, pristine text to save or None), or None if an anchor is missing."""
     cur = open(path, encoding="utf-8").read()
@@ -1716,7 +1766,7 @@ def main():
     changed = False
     here = os.path.dirname(os.path.abspath(__file__))
     kit = sorted(n for n in os.listdir(os.path.join(here, "..", "ui")) if n.startswith("Pk") and n.endswith((".qml", ".js"))) if os.path.isdir(os.path.join(here, "..", "ui")) else []
-    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "MpvBar.qml", "MpvIconButton.qml", "ZenTabView.qml", "IslandToasts.qml", "LauncherPage.qml", "AuthPage.qml", "VaultPage.qml", "VaultSavePage.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
+    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "MpvBar.qml", "MpvIconButton.qml", "DiscordVoice.qml", "DiscordView.qml", "DiscordOverlay.qml", "SetDiscord.qml", "ZenTabView.qml", "IslandToasts.qml", "LauncherPage.qml", "AuthPage.qml", "VaultPage.qml", "VaultSavePage.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
         src = os.path.join(here, name)
         if not os.path.exists(src):
             src = os.path.join(here, "..", "ui", name)   # the design kit (PkMorph)

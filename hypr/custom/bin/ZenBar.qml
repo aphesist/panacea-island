@@ -60,6 +60,7 @@ Item {
             model: [{ page: "main", title: "Home", icon: 0xF02DC },
                     { page: "chat", title: "Claude", icon: 0, logo: "file://" + Quickshell.env("HOME") + "/.config/panacea-claude/claude-logo.svg" },
                     { page: "zentab", title: "Zen", icon: 0, logo: Qt.resolvedUrl("zen-logo.svg") }]
+                   .concat(bar.sys.discordTabShown ? [{ page: "discord", title: "Discord", icon: 0, ph: "discord-logo" }] : [])   // v65: while the Discord tab shows
             delegate: Rectangle {
                 id: tabBtn
                 required property var modelData
@@ -74,7 +75,7 @@ Item {
                     spacing: 7
                     Image {
                         anchors.verticalCenter: parent.verticalCenter
-                        visible: !tabBtn.modelData.icon
+                        visible: !tabBtn.modelData.icon && !tabBtn.modelData.ph
                         width: 13; height: 13
                         source: tabBtn.modelData.logo || ""
                         sourceSize: Qt.size(52, 52)
@@ -87,6 +88,14 @@ Item {
                         text: tabBtn.modelData.icon ? String.fromCodePoint(tabBtn.modelData.icon) : ""
                         color: tabMa.containsMouse ? bar.sys.colFg : bar.sys.colMuted
                         font { family: bar.sys.fontFam; pixelSize: 13 }
+                    }
+                    PkIcon {   // a Phosphor logo (Discord), with the red dot while you're muted
+                        sys: bar.sys; anchors.verticalCenter: parent.verticalCenter
+                        visible: !!tabBtn.modelData.ph; name: tabBtn.modelData.ph || "circle"; size: 14; filled: true
+                        color: tabMa.containsMouse ? bar.sys.colFg : bar.sys.colMuted
+                        Rectangle { visible: tabBtn.modelData.page === "discord" && (bar.sys.discord.mute || bar.sys.discord.deaf)
+                                    x: parent.width - 4; y: -2; width: 7; height: 7; radius: 3.5
+                                    color: bar.sys.pk.accent; border.width: 1.5; border.color: "#000000" }
                     }
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
