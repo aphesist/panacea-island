@@ -60,6 +60,9 @@ Item {
         { id: "discord", title: "Discord", page: "SetDiscord.qml",
           sub: "Your voice calls from the island: the Discord tab and the overlay of who's talking.",
           keys: "discord vesktop voice call mute deafen overlay speaking volume vencord" },
+        { id: "bots",    title: "Bots", page: "SetBots.qml",
+          sub: "Your boopis bots on the island: the Bots tab, the pill while they work, their cards and approvals.",
+          keys: "bots boopis agents orb hermes team room approval approve cards pill" },
         { id: "vpn",     title: "VPN", page: "SetVpn.qml",
           sub: view.sys.tr("Клиент и профиль для быстрого подключения."),
           keys: "vpn mullvad proxy network client" },
@@ -79,6 +82,7 @@ Item {
         { id: "startup",    title: "Startup",                   icon: "rocket-launch",      pages: ["startup"] },
         { id: "claude",     title: "Claude",                    icon: "sparkle",            pages: ["claude"] },
         { id: "discord",    title: "Discord",                   icon: "discord-logo",       pages: ["discord"] },
+        { id: "bots",       title: "Bots",                      icon: "robot",              pages: ["bots"] },
         { id: "vpn",        title: "VPN",                       icon: "shield-check",       pages: ["vpn"] },
         { id: "security",   title: view.sys.tr("Безопасность"), icon: "lock-simple",        pages: ["lock"] },
         { id: "system",     title: view.sys.tr("Система"),      icon: "cpu",                pages: ["system"] }

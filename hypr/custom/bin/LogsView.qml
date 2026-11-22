@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 
@@ -12,6 +13,9 @@ Item {
     property var sys
     readonly property var t: sys.pk
     implicitHeight: col.implicitHeight
+    // the list is a card of fixed height inside the island's room (sys.pageMaxH): the header,
+    // search and filters stay, the entries scroll inside it
+    readonly property int maxH: sys.pageMaxH || 545
 
     property string level: "warning"        // all | warning | error
     property bool user: false
@@ -86,6 +90,7 @@ Item {
         spacing: view.t.s3
 
         PkHeader {
+            id: head
             sys: view.sys; width: parent.width
             title: "Logs"
             sub: (view.user ? "Your session" : "System") + "  ·  this boot  ·  " + (view.loading ? "loading…" : entries.count + " entries")
@@ -97,6 +102,7 @@ Item {
         }
         PkSearch { id: search; sys: view.sys; width: parent.width; placeholder: "Filter by text, program or unit" }
         Row {
+            id: filters
             width: parent.width; spacing: view.t.s2
             PkSegmented {
                 sys: view.sys
@@ -113,7 +119,8 @@ Item {
         }
 
         Rectangle {
-            width: parent.width; height: 430
+            width: parent.width
+            height: Math.max(160, Math.min(430, view.maxH - head.height - search.height - filters.height - 3 * col.spacing - 24))
             radius: view.t.rSurface; color: view.t.surface; clip: true
             PkText { sys: view.sys; anchors.centerIn: parent; role: "sub"; visible: !view.loading && entries.count === 0
                      text: view.level === "error" ? "No errors this boot" : view.level === "warning" ? "No warnings this boot" : "Nothing logged" }
@@ -122,7 +129,9 @@ Item {
                 anchors.fill: parent; anchors.margins: 6
                 model: entries
                 boundsBehavior: Flickable.StopAtBounds
+                clip: true
                 cacheBuffer: 600
+                ScrollBar.vertical: SetScroll { sys: view.sys }
                 delegate: Rectangle {
                     id: row
                     required property int index

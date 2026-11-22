@@ -169,7 +169,12 @@ def hardware():
         for line in subprocess.run(["lspci", "-mm"], capture_output=True, text=True, timeout=3).stdout.splitlines():
             f = [x.strip('"') for x in re.findall(r'"[^"]*"|\S+', line)]
             if len(f) > 3 and ("VGA" in f[1] or "3D" in f[1] or "Display" in f[1]):
-                gpus.append(f[2].replace(" Corporation", "") + " " + re.sub(r"\s*\[.*?\]\s*", " ", f[3]).strip())
+                # the marketing name is the bracketed part ("AD106M [GeForce RTX 4070 Max-Q / Mobile]"):
+                # use it, in the form nvidia-smi gives when the GPU is awake, so the name never changes
+                m = re.search(r"\[(.*?)\]", f[3])
+                model = m.group(1).strip() if m else f[3].strip()
+                model = re.sub(r"\s*Max-Q\s*/\s*Mobile$|\s*Mobile$", " Laptop GPU", model).strip()
+                gpus.append(f[2].replace(" Corporation", "") + " " + model)
     except (OSError, subprocess.TimeoutExpired):
         pass
     hw["gpus"] = gpus

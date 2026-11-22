@@ -12,7 +12,7 @@ back on its own). Re-run by panacea-portal-patch.path after Panacea updates.
 import os, sys
 
 D = os.path.expanduser("~/.config/panacea")
-VERSION = "v65"
+VERSION = "v70"
 TAG_PREFIX = "// panacea-local portal patch "
 TAG = TAG_PREFIX + VERSION
 
@@ -1047,7 +1047,7 @@ SHELL += [
 
 # ---- System screens (v38): island pages built from the kit. Each is a page name, a component
 # and an IPC call (`qs -p ~/.config/panacea ipc call pill <name>`).
-SCREENS = [("updates", "UpdatesView"), ("logs", "LogsView"), ("screen", "ScreenView"), ("editor", "EditorView"), ("startup", "StartupView"), ("calc", "CalcView"), ("discord", "DiscordView")]
+SCREENS = [("updates", "UpdatesView"), ("logs", "LogsView"), ("screen", "ScreenView"), ("editor", "EditorView"), ("startup", "StartupView"), ("calc", "CalcView"), ("discord", "DiscordView"), ("bots", "BotsPage")]
 SHELL += [
     ('                           : root.page === "agents"   ? agentsComp\n',
      ''.join('                           : root.page === "%s" ? %sComp   ' % (n, n) + TAG + '\n' for n, _ in SCREENS)
@@ -1720,6 +1720,131 @@ SHELL += [
      "PanelWindow {\n    id: wallFadeWin\n"),
 ]
 
+# ---- Bots on the island (v66): boopis bots. BotsLink.qml runs scripts/custom/boopis-bridge.mjs
+# (boopis's Hermes gateway: control socket ticket, then its WebSocket) and is the shell's `bots`;
+# OrbStore.qml (`orbs`) holds the bot faces (orb2 frames, ~/.local/share/panacea-island/orbs).
+# A Bots tab beside Home/Claude/Zen (BotsPage.qml: BotsView, BotChat, BotTeam), the collapsed
+# island while a bot works or needs you, growing into its reply / approval card (BotsIsland.qml),
+# Settings > Bots (SetBots.qml). IPC: bots, botsNext, botsPrev, botsSay, botsApprove.
+def _settings_index(sid):
+    try:
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "SettingsPanel.qml"), encoding="utf-8").read()
+        sec = src[src.index("sections"):src.index("readonly property var groups")]
+        import re
+        return re.findall(r'\{ id: "([a-z]+)",\s+title:', sec).index(sid)
+    except Exception:
+        return 0
+SHELL += [
+    ("            property string discordRing: \"green\"       // green | white\n",
+     "            property string discordRing: \"green\"       // green | white\n"
+     "            property bool   botsEnabled: true          " + TAG + ": boopis bots on the island\n"
+     "            property string botsTab: \"open\"            // open (while boopis runs) | always | off\n"
+     "            property string botsPill: \"busy\"           // busy | needs | off: the collapsed island\n"
+     "            property bool   botsCards: true\n"
+     "            property bool   botsApprovals: true\n"),
+    ("    onDiscordTabShownChanged: if (!discordTabShown && page === \"discord\") page = \"main\"\n",
+     "    onDiscordTabShownChanged: if (!discordTabShown && page === \"discord\") page = \"main\"\n"
+     "    BotsLink { id: botsLink; sys: root }   " + TAG + ": boopis bots\n"
+     "    OrbStore { id: orbStore }\n"
+     "    readonly property var bots: botsLink\n"
+     "    readonly property var orbs: orbStore\n"
+     "    readonly property bool botsTabShown: cfg.botsEnabled && (cfg.botsTab === \"always\" || (cfg.botsTab !== \"off\" && botsLink.up))\n"
+     "    onBotsTabShownChanged: if (!botsTabShown && page === \"bots\") page = \"main\"\n"
+     "    property bool botsCardOpen: false     // BotsIsland holds a card\n"
+     "    readonly property bool botsPillShown: cfg.botsEnabled && cfg.botsPill !== \"off\" && botsLink.up\n"
+     "        && (botsCardOpen || (cfg.botsPill === \"needs\" ? botsLink.anyNeeds : botsLink.anyBusy))\n"
+     "        && mpvPid <= 0 && !zenBarShown && !expanded && !settingsMode && !pillSide && !pillHidden && !wallsOpen\n"
+     "        && !toastActive && !osdActive && !btToastActive && !wifiToastActive && !acToastActive\n"
+     "        && !recPickActive && !voxActive && !fileOverIsland\n"
+     "    property string botsOpenChat: \"\"     // BotsPage opens this bot's chat when it loads\n"
+     "    property bool botsChatOpen: false     // a bot's or a room's chat is on screen: dictation goes into it\n"
+     "    property string botsDraft: \"\"        // talk mode on the stage: the dictated text, waiting in the bot's chat box\n"
+     "    signal botsStepped(int d)\n"
+     "    function botsOpen(id, chat) {\n"
+     "        if (id) botsLink.current = id;\n"
+     "        botsOpenChat = chat ? id : \"\";\n"
+     "        if (page !== \"bots\" || !expanded) togglePage(\"bots\");\n"
+     "    }\n"
+     "    function openSettingsPage(id) {\n"
+     "        settingsTab = ({ bots: " + str(_settings_index("bots")) + " })[id] || 0;\n"
+     "        if (page !== \"settings\" || !expanded) togglePage(\"settings\");\n"
+     "    }\n"),
+    # the tab: beside Discord's, the current bot's orb as its icon
+    ('.concat(root.discordTabShown ? [{page:"discord", title:"Discord", icon:0}] : [])',
+     '.concat(root.discordTabShown ? [{page:"discord", title:"Discord", icon:0}] : []).concat(root.botsTabShown ? [{page:"bots", title:"Bots", icon:0}] : [])'),
+    ("""                                             color: root.pk.accent; border.width: 2; border.color: "#000000" } }
+""", """                                             color: root.pk.accent; border.width: 2; border.color: "#000000" } }
+                        // """ + TAG + """: the Bots tab: the current bot's orb, still; a red dot when one needs you
+                        Item { visible: modelData.page === "bots"; anchors.verticalCenter: parent.verticalCenter; width: 19; height: 19
+                               readonly property var b: root.bots.bot(root.bots.current) || (root.bots.bots.length ? root.bots.bots[0] : null)
+                               BotOrb { anchors.centerIn: parent; size: 19; live: false; store: root.orbs
+                                        opacity: root.page === "bots" ? 1 : 0.6
+                                        botId: parent.b ? parent.b.id : ""; shape: parent.b ? parent.b.shape : "circle"
+                                        color: parent.b ? parent.b.color : "#a6a6ab"; reaction: "idle" }
+                               PkIcon { visible: !parent.b; sys: root; anchors.centerIn: parent; name: "robot"; size: 18; filled: true
+                                        color: root.page === "bots" ? root.colFg : root.colMuted }
+                               Rectangle { visible: root.bots.anyNeeds; x: parent.width - 5; y: -2; width: 8; height: 8; radius: 4
+                                           color: root.pk.accent; border.width: 2; border.color: "#000000" } }
+"""),
+    ("readonly property var tabRank: ({ main: 0, chat: 1, zentab: 2, discord: 3, vpn: 4 })",
+     "readonly property var tabRank: ({ main: 0, chat: 1, zentab: 2, discord: 3, bots: 3.5, vpn: 4 })"),
+    ('.concat(root.discordTabShown ? ["discord"] : []).concat(["vpn"])',
+     '.concat(root.discordTabShown ? ["discord"] : []).concat(root.botsTabShown ? ["bots"] : [])   // v66: exactly the tabs in the bar (VPN is not one)'),
+    ('&& !(page === "discord" && discordTabShown)\n',
+     '&& !(page === "discord" && discordTabShown) && !(page === "bots" && botsTabShown)\n'),
+    ('&& !(p === "discord" && root.discordTabShown); }',
+     '&& !(p === "discord" && root.discordTabShown) && !(p === "bots" && root.botsTabShown); }'),
+    ('calc: "Calculator", discord: "Discord" })[p]', 'calc: "Calculator", discord: "Discord", bots: "Bots" })[p]'),
+    ('calc: "calculator", discord: "discord-logo" })[p]', 'calc: "calculator", discord: "discord-logo", bots: "robot" })[p]'),
+    # dictation: into a bot's chat too, like the Claude chat
+    ('function voxTarget(): string { return (root.expanded && root.page === "chat") ? "chat" : "app"; }',
+     'function voxTarget(): string { return (root.expanded && (root.page === "chat" || (root.page === "bots" && root.botsTabShown))) ? "chat" : "app"; }   // bots: a chat box, or talk mode on the stage'),
+    # IPC
+    ("        function discordLeave(): void { root.discord.disconnect(); }\n",
+     "        function discordLeave(): void { root.discord.disconnect(); }\n"
+     "        function botsNext(): void { if (root.page === \"bots\" && root.expanded) root.botsStepped(1); else root.botsOpen(\"\", false); }   " + TAG + "\n"
+     "        function botsPrev(): void { if (root.page === \"bots\" && root.expanded) root.botsStepped(-1); else root.botsOpen(\"\", false); }\n"
+     "        function botsSay(text: string): void { if (root.bots.current && text) root.bots.send(root.bots.current, text); }\n"
+     "        function botsApprove(choice: string): void { root.bots.approve(choice || \"once\"); }\n"),
+    # the collapsed island: BotsIsland in the size chains, the usual pill hidden under it
+    ("                : root.mpvShown ? capsule.evenUp(mpvBarItem.implicitWidth)   " + TAG + ": mpv controls\n",
+     "                : root.botsPillShown ? capsule.evenUp(botsIslandItem.implicitWidth)   " + TAG + ": bots\n"
+     "                : root.mpvShown ? capsule.evenUp(mpvBarItem.implicitWidth)   " + TAG + ": mpv controls\n"),
+    ("root.mpvShown ? mpvBarItem.implicitHeight : root.zenBarShown",
+     "root.botsPillShown ? botsIslandItem.implicitHeight : root.mpvShown ? mpvBarItem.implicitHeight : root.zenBarShown"),
+    ("!root.zenBarShown && !root.mpvShown", "!root.zenBarShown && !root.mpvShown && !root.botsPillShown", "all"),
+    ("|| root.zenBarShown || root.mpvShown) return;", "|| root.zenBarShown || root.mpvShown || root.botsPillShown) return;"),
+    ("        // " + TAG + ": mpv's controls (MpvBar.qml), on the island's animated shape like the Zen bar\n",
+     "        // " + TAG + ": bots (BotsIsland.qml): the pill, growing into a reply / approval card\n"
+     "        BotsIsland {\n"
+     "            id: botsIslandItem\n"
+     "            anchors.top: parent.top\n"
+     "            anchors.horizontalCenter: parent.horizontalCenter\n"
+     "            width: parent.width\n"
+     "            height: parent.height\n"
+     "            z: 121\n"
+     "            sys: root\n"
+     "            clip: true\n"
+     "            onCardOpenChanged: root.botsCardOpen = cardOpen\n"
+     "            visible: opacity > 0.01\n"
+     "            opacity: 0\n"
+     "            Component.onCompleted: opacity = root.botsPillShown ? 1 : 0\n"
+     "            Connections {\n"
+     "                target: root\n"
+     "                function onBotsPillShownChanged() {\n"
+     "                    if (root.botsPillShown) botsIslandIn.restart();\n"
+     "                    else { botsIslandIn.stop(); botsIslandItem.opacity = 0; }\n"
+     "                }\n"
+     "            }\n"
+     "            SequentialAnimation {\n"
+     "                id: botsIslandIn\n"
+     "                PauseAnimation { duration: Math.round(root.animMs * 0.45) }\n"
+     "                NumberAnimation { target: botsIslandItem; property: \"opacity\"; to: 1; duration: root.animFast; easing.type: Easing.OutCubic }\n"
+     "            }\n"
+     "        }\n\n"
+     "        // " + TAG + ": mpv's controls (MpvBar.qml), on the island's animated shape like the Zen bar\n"),
+]
+
 
 def plan(path, repl):
     """-> (new text, pristine text to save or None), or None if an anchor is missing."""
@@ -1766,7 +1891,7 @@ def main():
     changed = False
     here = os.path.dirname(os.path.abspath(__file__))
     kit = sorted(n for n in os.listdir(os.path.join(here, "..", "ui")) if n.startswith("Pk") and n.endswith((".qml", ".js"))) if os.path.isdir(os.path.join(here, "..", "ui")) else []
-    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "MpvBar.qml", "MpvIconButton.qml", "DiscordVoice.qml", "DiscordView.qml", "DiscordOverlay.qml", "SetDiscord.qml", "ZenTabView.qml", "IslandToasts.qml", "LauncherPage.qml", "AuthPage.qml", "VaultPage.qml", "VaultSavePage.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
+    for name in kit + ["HomeView.qml", "UpdatesView.qml", "LogsView.qml", "ScreenView.qml", "EditorView.qml", "StartupView.qml", "CalcView.qml", "AppChooserView.qml", "SettingsPanel.qml", "NotifListView.qml", "TasksView.qml", "TasksChart.qml", "IslandGlow.qml", "ZenSearchView.qml", "ZenBar.qml", "MpvBar.qml", "MpvIconButton.qml", "DiscordVoice.qml", "DiscordView.qml", "DiscordOverlay.qml", "SetDiscord.qml", "OrbStore.qml", "BotTick.qml", "BotSpring.qml", "BotOrbEyes.qml", "BotOrb.qml", "BotWave.qml", "BotSlideText.qml", "BotsLink.qml", "BotsPill.qml", "BotCard.qml", "BotApproval.qml", "BotChatBox.qml", "BotChat.qml", "BotRoom.qml", "BotTeam.qml", "BotsGlyph.qml", "BotsLastRow.qml", "BotsView.qml", "BotsPage.qml", "BotsIsland.qml", "SetBots.qml", "ZenTabView.qml", "IslandToasts.qml", "LauncherPage.qml", "AuthPage.qml", "VaultPage.qml", "VaultSavePage.qml", "zen-logo.svg"]:   # written first: shell.qml uses them
         src = os.path.join(here, name)
         if not os.path.exists(src):
             src = os.path.join(here, "..", "ui", name)   # the design kit (PkMorph)

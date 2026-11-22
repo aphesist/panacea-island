@@ -1,0 +1,26 @@
+<!doctype html><html><body style="margin:0;background:#000">
+<script>
+// virtual clock: the recorder decides when time moves
+let NOW = 1000, cbs = [];
+performance.now = () => NOW;
+window.requestAnimationFrame = f => { cbs.push(f); return cbs.length; };
+window.cancelAnimationFrame = () => {};
+let seed = 7; Math.random = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+// canvas recorder: every fill of a frame, in orb units (the transform is k = W/3.2 around the centre)
+const P = CanvasRenderingContext2D.prototype;
+let cur = [], sub = null, frame = null;
+window.__frames = [];
+const oClear = P.clearRect;
+P.clearRect = function (...a) { frame = []; window.__frames.push(frame); return oClear.apply(this, a); };
+const oBegin = P.beginPath; P.beginPath = function () { cur = []; sub = null; return oBegin.call(this); };
+const oMove = P.moveTo; P.moveTo = function (x, y) { sub = [[x, y]]; cur.push(sub); return oMove.call(this, x, y); };
+const oLine = P.lineTo; P.lineTo = function (x, y) { if (!sub) { sub = []; cur.push(sub); } sub.push([x, y]); return oLine.call(this, x, y); };
+const oFill = P.fill; P.fill = function (...a) {
+  if (frame) frame.push({ a: this.globalAlpha, f: String(this.fillStyle), p: cur.map(s => s.slice()) });
+  return oFill.apply(this, a);
+};
+window.__step = (dt) => { NOW += dt * 1000; const l = cbs; cbs = []; for (const f of l) f(NOW); };
+</script>
+<script src="orb-avatar.js"></script>
+<orb-avatar id="o" size="240" mode="drift" idle-motion="off" color="#4fc9a8" eye-color="#141418"></orb-avatar>
+</body></html>

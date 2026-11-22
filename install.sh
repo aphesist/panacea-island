@@ -34,6 +34,11 @@ fc-cache -f "$DATA/fonts" >/dev/null 2>&1 || true
 say "Helper scripts (panacea/scripts/custom)"
 for f in "$HERE"/panacea/scripts/custom/*; do put "${f#$HERE/}" "$CFG/${f#$HERE/}"; done
 
+say "Bot faces for the Bots tab (orb2 frames, ~/.local/share/panacea-island/orbs)"
+mkdir -p "$DATA/panacea-island/orbs"
+tar -C "$DATA/panacea-island/orbs" -xJf "$HERE/data/orbs.tar.xz"
+command -v node >/dev/null || echo "  note: the Bots tab's link to boopis needs Node.js (pacman -S nodejs)"
+
 say "panacea-island command (~/.local/bin): what the launchers and file links call"
 put bin/panacea-island "$HOME/.local/bin/panacea-island"
 put bin/panacea-ctl "$HOME/.local/bin/panacea-ctl"   # drive the desktop: windows, media, Discord, the island, app controls
