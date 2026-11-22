@@ -49,6 +49,12 @@ power and settings sit beside it.
 
 `ipc call pill` is short for `qs -p ~/.config/panacea ipc call pill`.
 
+`panacea-ctl` (`bin/`, installed to `~/.local/bin`) drives the desktop from one command, for you
+or for the island's Claude: windows (focus, close, workspaces, open apps), typing and keys
+(wtype), media players (MPRIS), volume and mic (PipeWire), Discord voice (status, mute, deafen,
+leave, per-person volume), the island's IPC, notifications, and any app's buttons and fields
+through AT-SPI (`a11y on` first; off by default). `panacea-ctl help` lists it all; `--json` for scripts.
+
 The main screens are also apps in the launcher (Task Manager, Files, Text Editor, Calculator, Image Viewer,
 Updates, Logs, Screen Capture, Settings), each with an icon from one family in `icons/`
 (`make-icons.py` redraws them from the Phosphor font).

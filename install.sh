@@ -36,6 +36,7 @@ for f in "$HERE"/panacea/scripts/custom/*; do put "${f#$HERE/}" "$CFG/${f#$HERE/
 
 say "panacea-island command (~/.local/bin): what the launchers and file links call"
 put bin/panacea-island "$HOME/.local/bin/panacea-island"
+put bin/panacea-ctl "$HOME/.local/bin/panacea-ctl"   # drive the desktop: windows, media, Discord, the island, app controls
 
 say "The island's screens as apps in the launcher, with their icons; they replace Panacea's broken launchers"
 for f in "$HERE"/applications/*.desktop; do put "${f#$HERE/}" "$DATA/applications/$(basename "$f")"; done

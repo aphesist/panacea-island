@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+"""panacea-ctl - one command to drive this desktop: windows, apps, typing, media, volume,
+Discord, the island, notifications and any app's accessibility tree. Made so the island's
+Claude (or you) can control the machine through real interfaces instead of guessing:
+
+  Hyprland IPC (hyprctl)   windows, focus, workspaces, launching
+  wtype                    typing and keys into the focused window
+  MPRIS (playerctl)        media players (Spotify, mpv, Zen...)
+  PipeWire (wpctl)         volume and microphone
+  discord-bridge.mjs       Discord (Vesktop) voice, through its local DevTools port
+  Quickshell IPC (qs)      the island (`ipc call pill ...`)
+  AT-SPI                   read and press buttons/fields in apps that expose accessibility
+
+Run `panacea-ctl help` for the commands. Output is plain text, or JSON with --json.
+"""
+import json, os, re, shutil, subprocess, sys
+
+HOME = os.path.expanduser("~")
+BRIDGE = f"{HOME}/.config/panacea/scripts/custom/discord-bridge.mjs"
+JSON_OUT = "--json" in sys.argv
+ARGS = [a for a in sys.argv[1:] if a != "--json"]
+
+
+def run(cmd, check=False, capture=True):
+    r = subprocess.run(cmd, capture_output=capture, text=True)
+    if check and r.returncode != 0:
+        die((r.stderr or r.stdout or f"{cmd[0]} failed").strip())
+    return r.stdout.strip() if capture else ""
+
+
+def die(msg, code=1):
+    print(f"panacea-ctl: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def show(data, text):
+    print(json.dumps(data, ensure_ascii=False, indent=1) if JSON_OUT else text)
+
+
+# ---- windows (Hyprland) -------------------------------------------------------------------
+def clients():
+    return json.loads(run(["hyprctl", "clients", "-j"]) or "[]")
+
+
+def find_window(match):
+    m = match.lower()
+    cl = [c for c in clients() if c.get("mapped")]
+    for key in ("class", "initialClass"):
+        hit = [c for c in cl if c.get(key, "").lower() == m]
+        if hit: return min(hit, key=lambda c: c.get("focusHistoryID", 99))
+    hit = [c for c in cl if m in c.get("class", "").lower() or m in c.get("title", "").lower()]
+    if hit: return min(hit, key=lambda c: c.get("focusHistoryID", 99))
+    die(f"no window matches {match!r} (see `panacea-ctl windows`)")
+
+
+def dispatch(lua):
+    out = run(["hyprctl", "dispatch", lua])
+    if out and out != "ok": die(f"hyprctl: {out}")
+
+
+def cmd_windows(_):
+    cl = sorted((c for c in clients() if c.get("mapped")), key=lambda c: c.get("focusHistoryID", 99))
+    rows = [{"class": c["class"], "title": c["title"], "workspace": c["workspace"]["name"], "pid": c["pid"],
+             "address": c["address"], "focused": c.get("focusHistoryID") == 0, "fullscreen": bool(c.get("fullscreen")),
+             "floating": c.get("floating", False)} for c in cl]
+    show(rows, "\n".join(f"{'*' if r['focused'] else ' '} [{r['workspace']}] {r['class']}: {r['title'][:90]}" for r in rows) or "(no windows)")
+
+
+def cmd_focus(a):
+    if not a: die("focus WINDOW (class or part of the title)")
+    w = find_window(" ".join(a))
+    dispatch(f'hl.dsp.focus({{ window = "address:{w["address"]}" }})')
+    print(f"focused {w['class']}: {w['title'][:80]}")
+
+
+def cmd_close(a):
+    if not a: die("close WINDOW")
+    w = find_window(" ".join(a))
+    dispatch(f'hl.dsp.focus({{ window = "address:{w["address"]}" }})')
+    dispatch("hl.dsp.window.close()")
+    print(f"asked {w['class']} to close")
+
+
+def cmd_workspace(a):
+    if not a: die("workspace N")
+    ws = a[0] if not a[0].lstrip("-").isdigit() else int(a[0])
+    dispatch(f"hl.dsp.focus({{ workspace = {json.dumps(ws)} }})")
+
+
+def desktop_ids():
+    ids = {}
+    for d in [f"{HOME}/.local/share/applications", "/usr/share/applications"]:
+        if not os.path.isdir(d): continue
+        for f in os.listdir(d):
+            if not f.endswith(".desktop") or f[:-8] in ids: continue
+            name = ""
+            try:
+                for line in open(os.path.join(d, f), encoding="utf-8", errors="replace"):
+                    if line.startswith("Name="): name = line[5:].strip(); break
+                    if line.startswith("NoDisplay=true"): break
+            except OSError: continue
+            ids[f[:-8]] = name
+    return ids
+
+
+def cmd_open(a):
+    if not a: die("open APP (desktop name like 'Discord', a desktop id, or a command)")
+    q = " ".join(a)
+    ids = desktop_ids()
+    pick = next((i for i in ids if i.lower() == q.lower()), None) \
+        or next((i for i, n in ids.items() if n.lower() == q.lower()), None) \
+        or next((i for i, n in ids.items() if q.lower() in n.lower()), None)
+    if pick:
+        subprocess.Popen(["gtk-launch", pick], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        print(f"launched {ids[pick] or pick} ({pick}.desktop)")
+    else:
+        dispatch(f"hl.dsp.exec_cmd({json.dumps(q)})")
+        print(f"ran {q!r}")
+
+
+# ---- keyboard (wtype, into the focused window) ----------------------------------------------
+def cmd_type(a):
+    if not a: die("type TEXT  (into the focused window)")
+    run(["wtype", "--", " ".join(a)], check=True)
+
+
+def cmd_key(a):
+    """key ctrl+shift+t | key Return | key alt+F4"""
+    if not a: die("key COMBO (e.g. ctrl+l, Return, ctrl+shift+t)")
+    mods = {"ctrl": "ctrl", "control": "ctrl", "shift": "shift", "alt": "alt", "super": "logo", "win": "logo", "meta": "logo"}
+    for combo in a:
+        parts = combo.split("+")
+        argv = ["wtype"]
+        held = [mods[p.lower()] for p in parts[:-1] if p.lower() in mods]
+        for m in held: argv += ["-M", m]
+        argv += ["-k", parts[-1]]
+        for m in reversed(held): argv += ["-m", m]
+        run(argv, check=True)
+
+
+# ---- media (MPRIS) and volume (PipeWire) ------------------------------------------------------
+def cmd_media(a):
+    act = a[0] if a else "status"
+    player = []
+    if "--player" in a:
+        player = ["-p", a[a.index("--player") + 1]]
+    if act in ("play", "pause", "next", "previous", "stop"):
+        run(["playerctl", *player, act], check=True)
+    elif act in ("toggle", "play-pause"):
+        run(["playerctl", *player, "play-pause"], check=True)
+    elif act == "prev":
+        run(["playerctl", *player, "previous"], check=True)
+    elif act == "list":
+        print(run(["playerctl", "-l"]) or "(no players)")
+        return
+    elif act != "status":
+        die("media status|list|play|pause|toggle|next|prev|stop [--player NAME]")
+    fmt = "{{playerName}}\x1f{{status}}\x1f{{artist}}\x1f{{title}}"
+    rows = []
+    for line in run(["playerctl", "-a", *player, "metadata", "--format", fmt]).splitlines():
+        f = line.split("\x1f")
+        if len(f) == 4: rows.append({"player": f[0], "status": f[1], "artist": f[2], "title": f[3]})
+    show(rows, "\n".join(f"{r['player']}: {r['status']}  {r['artist']} - {r['title']}".replace(" -  ", " ") for r in rows) or "(nothing playing)")
+
+
+def vol_of(target):
+    out = run(["wpctl", "get-volume", target])          # "Volume: 0.45 [MUTED]"
+    m = re.search(r"([\d.]+)", out)
+    return {"volume": round(float(m.group(1)) * 100) if m else None, "muted": "MUTED" in out}
+
+
+def cmd_volume(a, target="@DEFAULT_AUDIO_SINK@", label="volume"):
+    v = a[0] if a else "get"
+    if v == "mute":
+        run(["wpctl", "set-mute", target, "toggle"], check=True)
+    elif re.fullmatch(r"[+-]?\d+", v):
+        if v[0] in "+-":
+            run(["wpctl", "set-volume", "-l", "1.0", target, f"{v[1:]}%{v[0]}"], check=True)
+        else:
+            run(["wpctl", "set-volume", target, f"{int(v)}%"], check=True)
+    elif v != "get":
+        die(f"{label} get|N|+N|-N|mute")
+    s = vol_of(target)
+    show(s, f"{label} {s['volume']}%" + (" (muted)" if s["muted"] else ""))
+
+
+def cmd_mic(a):
+    cmd_volume(a, "@DEFAULT_AUDIO_SOURCE@", "mic")
+
+
+# ---- Discord (Vesktop) ----------------------------------------------------------------------
+def discord(cmd=None):
+    argv = ["node", BRIDGE] + (["--cmd", json.dumps(cmd)] if cmd else ["--once"])
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=12)
+    line = (r.stdout.strip().splitlines() or ["{}"])[-1]
+    try: st = json.loads(line)
+    except ValueError: die("no answer from the Discord bridge")
+    if not st.get("up"):
+        why = {"closed": "Discord isn't running", "noflag": "Vesktop lacks --remote-debugging-port=9223 (vesktop-flags.conf)",
+               "restart": "Discord was started before the port was added; restart it"}.get(st.get("why"), "Discord unreachable")
+        die(why)
+    return st
+
+
+def person(st, name):
+    n = name.lower()
+    ps = [p for p in st.get("people", []) if not p.get("me")]
+    hit = [p for p in ps if p["name"].lower() == n] or [p for p in ps if n in p["name"].lower()]
+    if not hit: die(f"nobody called {name!r} in the call")
+    return hit[0]
+
+
+def cmd_discord(a):
+    act = a[0] if a else "status"
+    if act == "status":
+        st = discord()
+    elif act in ("mute", "deafen", "leave", "noise"):
+        st = discord({"cmd": "disconnect" if act == "leave" else act})
+    elif act in ("volume", "localmute"):
+        if len(a) < 2 + (act == "volume"): die("discord volume NAME 0-200 | discord localmute NAME")
+        st = discord()
+        if act == "volume":
+            p = person(st, " ".join(a[1:-1])); st = discord({"cmd": "volume", "id": p["id"], "v": int(a[-1])})
+        else:
+            p = person(st, " ".join(a[1:])); st = discord({"cmd": "localMute", "id": p["id"]})
+    else:
+        die("discord status|mute|deafen|noise|leave|volume NAME N|localmute NAME")
+    if not st.get("call"):
+        show(st, "Discord: not in a call"); return
+    me = ("muted" if st.get("mute") else "mic on") + (", deafened" if st.get("deaf") else "")
+    lines = [f"{st['channel']} ({st['guild']}), you: {me}, {st.get('ping', 0)} ms"]
+    for p in st["people"]:
+        tags = [t for t, on in (("you", p["me"]), ("speaking", p["speaking"]), ("muted", p["mute"]), ("deafened", p["deaf"]),
+                                ("muted for you", p.get("localMute")), ("live", p.get("stream")), ("camera", p.get("video"))) if on]
+        vol = "" if p["me"] or p.get("volume", 100) == 100 else f" {p['volume']}%"
+        lines.append(f"  {p['name']}{vol}" + (f"  [{', '.join(tags)}]" if tags else ""))
+    show(st, "\n".join(lines))
+
+
+# ---- the island, notifications ----------------------------------------------------------------
+def cmd_island(a):
+    if not a or a[0] == "list":
+        print(run(["qs", "-p", f"{HOME}/.config/panacea", "ipc", "show"])); return
+    print(run(["qs", "-p", f"{HOME}/.config/panacea", "ipc", "call", "pill", *a]))
+
+
+def cmd_notify(a):
+    if not a: die("notify TITLE [BODY]")
+    run(["notify-send", "-a", "Panacea", a[0], " ".join(a[1:])], check=True)
+
+
+# ---- accessibility (AT-SPI): read and press any app's controls ---------------------------------
+def atspi():
+    try:
+        import gi
+        gi.require_version("Atspi", "2.0")
+        from gi.repository import Atspi
+        return Atspi
+    except Exception as e:
+        die(f"AT-SPI unavailable ({e})")
+
+
+def a11y_bus(prop, value=None):
+    base = ["busctl", "--user"]
+    if value is None:
+        return run(base + ["get-property", "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Status", prop])
+    run(base + ["set-property", "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Status", prop, "b", "true" if value else "false"], check=True)
+
+
+def cmd_a11y(a):
+    """Apps (Zen, Electron, Qt) only build their accessibility tree when this is on."""
+    act = a[0] if a else "status"
+    if act in ("on", "off"):
+        a11y_bus("IsEnabled", act == "on")
+        print(f"accessibility {act}: apps started from now on {'expose' if act == 'on' else 'stop exposing'} their controls "
+              "(running Electron/Zen windows may need a restart)")
+    else:
+        print("accessibility " + ("on" if a11y_bus("IsEnabled").endswith("true") else "off"))
+
+
+def apps():
+    A = atspi(); d = A.get_desktop(0)
+    return [d.get_child_at_index(i) for i in range(d.get_child_count())]
+
+
+def find_app(name):
+    n = name.lower()
+    for app in apps():
+        try:
+            if n in (app.get_name() or "").lower(): return app
+        except Exception: pass
+    die(f"no accessible app matches {name!r} (`panacea-ctl ui list`; `panacea-ctl a11y on` and restart the app)")
+
+
+def walk(node, depth, maxdepth, out, path=""):
+    try:
+        role, name = node.get_role_name(), node.get_name() or ""
+        n = node.get_child_count()
+    except Exception:
+        return
+    out.append((depth, role, name, node, path))
+    if depth >= maxdepth: return
+    for i in range(min(n, 400)):
+        try: c = node.get_child_at_index(i)
+        except Exception: continue
+        if c is not None: walk(c, depth + 1, maxdepth, out, f"{path}/{i}")
+
+
+def cmd_ui(a):
+    act = a[0] if a else "list"
+    if act == "list":
+        rows = []
+        for app in apps():
+            try: rows.append({"name": app.get_name(), "pid": app.get_process_id(), "windows": app.get_child_count()})
+            except Exception: pass
+        show(rows, "\n".join(f"{r['name']} (pid {r['pid']}, {r['windows']} windows)" for r in rows)); return
+    if len(a) < 2: die("ui list | ui tree APP [DEPTH] | ui press APP NAME | ui set APP NAME TEXT")
+    app = find_app(a[1])
+    if act == "tree":
+        nodes = []; walk(app, 0, int(a[2]) if len(a) > 2 else 12, nodes)
+        interesting = {"push button", "toggle button", "check box", "radio button", "menu item", "link", "entry", "text",
+                       "combo box", "page tab", "list item", "slider", "spin button", "frame", "heading", "label"}
+        rows = [{"depth": d, "role": r, "name": n, "path": p} for d, r, n, _, p in nodes if n or r in interesting]
+        show(rows, "\n".join(f"{'  ' * d}{r}: {n}" for d, r, n, _, p in nodes if n or r in interesting)); return
+    nodes = []; walk(app, 0, 30, nodes)
+    want = a[2].lower()
+    hit = [x for x in nodes if x[2].lower() == want] or [x for x in nodes if want in x[2].lower()]
+    if not hit: die(f"no control named {a[2]!r} in {a[1]}")
+    node = hit[0][3]
+    if act == "press":
+        act_if = node.get_action_iface() if hasattr(node, "get_action_iface") else None
+        if act_if is None or act_if.get_n_actions() == 0: die(f"{a[2]!r} has no action")
+        act_if.do_action(0); print(f"pressed {hit[0][1]} {hit[0][2]!r}")
+    elif act == "set":
+        if len(a) < 4: die("ui set APP NAME TEXT")
+        et = node.get_editable_text_iface() if hasattr(node, "get_editable_text_iface") else None
+        if et is None: die(f"{a[2]!r} isn't an editable field")
+        et.set_text_contents(" ".join(a[3:])); print(f"set {a[2]!r}")
+    else:
+        die("ui list | ui tree APP [DEPTH] | ui press APP NAME | ui set APP NAME TEXT")
+
+
+HELP = """panacea-ctl - drive this desktop (add --json for machine-readable output)
+
+windows                        list windows (* = focused)
+focus WINDOW | close WINDOW    by class or part of the title
+workspace N                    switch workspace
+open APP                       launcher name ("Discord"), desktop id, or a command
+type TEXT | key COMBO...       into the focused window (key ctrl+l, Return, ctrl+shift+t)
+media [status|list|play|pause|toggle|next|prev] [--player NAME]
+volume [get|N|+N|-N|mute]      speakers;  mic [get|N|mute]  microphone
+discord [status|mute|deafen|noise|leave|volume NAME N|localmute NAME]
+island [list | FUNCTION ARGS]  the island's IPC (e.g. island discord, island settings)
+notify TITLE [BODY]            a notification
+a11y [status|on|off]           apps expose their controls to `ui` (off by default)
+ui list | ui tree APP [DEPTH] | ui press APP NAME | ui set APP NAME TEXT
+"""
+
+COMMANDS = {"windows": cmd_windows, "focus": cmd_focus, "close": cmd_close, "workspace": cmd_workspace, "open": cmd_open,
+            "type": cmd_type, "key": cmd_key, "media": cmd_media, "volume": cmd_volume, "mic": cmd_mic,
+            "discord": cmd_discord, "island": cmd_island, "notify": cmd_notify, "a11y": cmd_a11y, "ui": cmd_ui}
+
+if __name__ == "__main__":
+    if not ARGS or ARGS[0] in ("help", "-h", "--help"):
+        print(HELP, end=""); sys.exit(0)
+    f = COMMANDS.get(ARGS[0]) or die(f"unknown command {ARGS[0]!r}; see `panacea-ctl help`")
+    f(ARGS[1:])

@@ -17,6 +17,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const PORT = Number(process.env.PANACEA_DISCORD_PORT || 9223);
+// One-shot use (panacea-ctl discord): `--once` prints one state line and exits; `--cmd '{json}'`
+// sends that command, prints the state after it and exits. Exit 1 (with the link line) if unreachable.
+const ONCE = process.argv.includes("--once") || process.argv.includes("--cmd");
+const CMD = process.argv.includes("--cmd") ? process.argv[process.argv.indexOf("--cmd") + 1] : null;
+let cmdSent = false;
+if (ONCE) setTimeout(() => process.exit(cmdSent ? 0 : 1), 6000);
 const out = o => process.stdout.write(JSON.stringify(o) + "\n");
 
 // ---- the part that runs inside Discord's page --------------------------------------------
@@ -121,6 +127,7 @@ function whyDown() {
   return flags.split("\n").some(l => l.trim() === `--remote-debugging-port=${PORT}`) ? "restart" : "noflag";
 }
 function link(why) {
+  if (ONCE) { out({ t: "link", up: false, why }); process.exit(1); }
   if (linkSent === why) return;
   linkSent = why;
   out({ t: "link", up: false, why });
@@ -163,7 +170,15 @@ async function connect() {
     if (m.method === "Runtime.bindingCalled" && m.params.name === "__panaceaVoice") {
       linkSent = "";
       // Discord's CDN serves WebP, which Qt can't read without qt6-imageformats: ask for PNG
+      if (ONCE && m.params.payload.includes('"t":"speak"')) return;
+      if (CMD && !cmdSent) {   // the state before: send the command, print the state after it
+        cmdSent = true;
+        send("Runtime.evaluate", { expression: `window.__panaceaVoiceCmd && window.__panaceaVoiceCmd(${CMD})` });
+        setTimeout(() => { process.stdout.write(m.params.payload + "\n"); process.exit(0); }, 1500);   // unchanged state: no new line comes
+        return;
+      }
       process.stdout.write(m.params.payload.replace(/(https:\/\/cdn\.discordapp\.com\/[^"?]+?)\.(webp|gif)(\?size=\d+)?/g, "$1.png?size=128") + "\n");
+      if (ONCE) process.exit(0);
     } else if (m.method === "Runtime.executionContextCreated" && m.params.context.auxData && m.params.context.auxData.isDefault) {
       clearTimeout(injectTimer); injectTimer = setTimeout(inject, 1500);   // the page reloaded
     }
@@ -178,7 +193,7 @@ async function connect() {
   ws.onerror = () => {};
 }
 
-createInterface({ input: process.stdin }).on("line", line => {
+if (!ONCE) createInterface({ input: process.stdin }).on("line", line => {
   let c; try { c = JSON.parse(line); } catch { return; }
   if (!c || typeof c.cmd !== "string") return;
   send("Runtime.evaluate", { expression: `window.__panaceaVoiceCmd && window.__panaceaVoiceCmd(${JSON.stringify(c)})` });
